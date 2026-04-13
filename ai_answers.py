@@ -737,7 +737,7 @@ class SXNGPlugin(Plugin):
                 return Response("Missing API key or query", status=400)
             
             today = time.strftime("%Y-%m-%d")
-            target_words = int(self.max_tokens * 0.2)
+            target_words = int(self.max_tokens * 0.4)
             lang_instruction = f" Respond in {lang}." if lang not in ('all', 'auto') else ""
 
             SYSTEM = f"You are a search synthesis engine. Direct, grounded, citation-accurate. Today is {today}.{lang_instruction}"
@@ -748,10 +748,11 @@ class SXNGPlugin(Plugin):
                     max_source_idx = max(map(int, indices))
 
             CORE_RULES = [
-                "DENSITY 4/5: Expert-briefing level. No filler, no transitions. Every sentence = new information.",
-                f"BREVITY: {target_words} words max. Complete, not verbose.",
-                f"CITATIONS: Cite format is [n] for facts from grounding sources",
-                "NO HEDGE: State answers confidently. Note uncertainty only if critical.",
+                "DENSITY 4/5: Expert-briefing level. No filler, no transitions, every sentence = new information.",
+                f"BREVITY: Aim for ~{target_words} words. Be concise but comprehensive.",
+                "CITATIONS: Cite format is [n] for facts from grounding sources or [*] to fill in with general knowledge.",
+                "CONFLICTS: If sources contradict, state the conflict briefly.",
+                "NO HEDGE: Do not use phrases like 'Based on the sources' or 'It appears that'. State facts directly.",
             ]
 
             if q == "Continue":
@@ -761,7 +762,7 @@ class SXNGPlugin(Plugin):
             else:
                 task = "ANSWER FIRST: Lead with the direct answer. No preamble, no context-setting."
 
-            grounding = "GROUNDING: KNOWLEDGE GRAPH > DEEP > SHALLOW." if context_text else "GROUNDING: No sources available. Use knowledge and note 'based on general knowledge'."
+            grounding = "GROUNDING: KNOWLEDGE GRAPH > DEEP > SHALLOW." if context_text else "GROUNDING: No sources available. Use general knowledge and cite as [*] which means based on general knowledge."
             history_rule = "HISTORY: Refer to prior exchange for context. Ideally, do not repeat any claims." if prev_answer else None
 
             instructions = [task] + CORE_RULES + [grounding]
