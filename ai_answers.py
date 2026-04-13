@@ -183,7 +183,7 @@ INTERACTIVE_HTML = '''
                     </div>
 '''
 
-CITATION_HELPER_JS = '''
+CITATION_HELPER_JS = r'''
                         function renderCitations(text, urls) {
                             const fragment = document.createDocumentFragment();
                             const re = /\[(\d{1,2}(?:\s*,\s*\d{1,2})*)\]/g;
@@ -237,7 +237,7 @@ CITATION_HELPER_JS = '''
                         }
 '''
 
-INTERACTIVE_JS = '''
+INTERACTIVE_JS = r'''
                         const footer = document.getElementById('sxng-footer');
                         const input = document.getElementById('sxng-action-input');
                         // Inherited from outer scope: box, data, conversation
@@ -572,13 +572,23 @@ class SXNGPlugin(Plugin):
         results = []
         limit = self.context_deep_count + self.context_shallow_count
         for r in raw_results[:limit]:
-            results.append({
-                'title': r.get('title', ''),
-                'content': r.get('content', ''),
-                'url': r.get('url', ''),
-                'publishedDate': r.get('publishedDate', '')
-            })
-        
+            # Handle both MainResult (attribute access) and LegacyResult (dict access)
+            if hasattr(r, 'title'):
+                results.append({
+                    'title': getattr(r, 'title', ''),
+                    'content': getattr(r, 'content', ''),
+                    'url': getattr(r, 'url', ''),
+                    'publishedDate': getattr(r, 'publishedDate', '')
+                })
+            else:
+                # Legacy dictionary-style access
+                results.append({
+                    'title': r.get('title', ''),
+                    'content': r.get('content', ''),
+                    'url': r.get('url', ''),
+                    'publishedDate': r.get('publishedDate', '')
+                })
+
         # SearXNG already merges infoboxes by ID - take first with full content
         infoboxes = []
         for ib in raw_infoboxes[:1]:
@@ -875,9 +885,7 @@ class SXNGPlugin(Plugin):
             generator = stream_gemini if self.is_gemini else stream_openai_compatible
 
 
-            # If configured, force-unload Ollama model right after finishing the stream.
-
-            # This uses the native /api/chat endpoint with keep_alive=0.
+            # Force-unload Ollama model after stream via keep_alive=0
 
             if self.provider == 'ollama' and getattr(self, 'ollama_unload_after', False):
 
@@ -934,13 +942,13 @@ class SXNGPlugin(Plugin):
         # Deep sources: full content
         deep_lines = []
         for i, r in enumerate(raw_results[:self.context_deep_count]):
-            url = r.get('url', '')
+            url = getattr(r, 'url', '') if hasattr(r, 'url') else r.get('url', '')
             result_urls.append(url)
             domain = urlparse(url).netloc.replace('www.', '')
-            date = r.get('publishedDate')
+            date = getattr(r, 'publishedDate', '') if hasattr(r, 'publishedDate') else r.get('publishedDate')
             date_str = f" ({date})" if date else ""
-            title = (r.get('title') or "").replace('\n', ' ').strip()
-            content = str(r.get('content', '')).replace('\n', ' ').strip()[:800]
+            title = (getattr(r, 'title', '') if hasattr(r, 'title') else r.get('title') or "").replace('\n', ' ').strip()
+            content = str(getattr(r, 'content', '') if hasattr(r, 'content') else r.get('content', '')).replace('\n', ' ').strip()[:800]
             idx = i + 1 + offset
             deep_lines.append(f"[{idx}] {domain}{date_str}: {title}: {content}")
         
@@ -953,10 +961,10 @@ class SXNGPlugin(Plugin):
             start_idx = self.context_deep_count
             end_idx = self.context_deep_count + self.context_shallow_count
             for i, r in enumerate(raw_results[start_idx:end_idx]):
-                url = r.get('url', '')
+                url = getattr(r, 'url', '') if hasattr(r, 'url') else r.get('url', '')
                 result_urls.append(url)
                 domain = urlparse(url).netloc.replace('www.', '')
-                title = (r.get('title') or '').replace('\n', ' ').strip()[:60]
+                title = (getattr(r, 'title', '') if hasattr(r, 'title') else r.get('title') or '').replace('\n', ' ').strip()[:60]
                 idx = i + 1 + start_idx + offset
                 shallow_lines.append(f"[{idx}] {domain}: {title}")
             
@@ -1002,7 +1010,7 @@ class SXNGPlugin(Plugin):
             js_q = json.dumps(q_clean)
             js_lang = json.dumps(lang)
             total_context_count = self.context_deep_count + self.context_shallow_count
-            js_urls = json.dumps([r.get('url') for r in raw_results[:total_context_count]])
+            js_urls = json.dumps([getattr(r, 'url', '') if hasattr(r, 'url') else r.get('url', '') for r in raw_results[:total_context_count]])
 
             is_interactive = self.interactive
             
@@ -1015,7 +1023,7 @@ class SXNGPlugin(Plugin):
             stream_q = 'overrideQ || q_init' if is_interactive else 'q_init'
             stream_body = f'''prev_answer: prevAnswer''' if is_interactive else ''
 
-            html_payload = f'''
+            html_payload = rf'''
                 <article id="sxng-stream-box" class="answer" style="display:none; margin: 1rem 0;">
                     <style>
                         @keyframes sxng-fade-pulse {{
@@ -1078,7 +1086,7 @@ class SXNGPlugin(Plugin):
 
                         {interactive_js_init}
                         function synthesizeQuery(original, followup) {{
-                            // combine with original for context, stripping generic question starters
+                            // Strip generic question starters
                             const cleanOrig = original.replace(/^(what|how|why|when|where|who|which|is|are|can|does|do)(\s+(is|are|do|does|can|to|a|an|the))?\s+/i, '');
                             const origWords = cleanOrig.split(' ').slice(0, 12);
                             return `${{origWords.join(' ')}} ${{followup}}`.trim();
@@ -1265,7 +1273,7 @@ class SXNGPlugin(Plugin):
                             }}
                         }}
 
-                        // Warmup handshake
+                        // Warmup
                         fetch('/ai-stream', {{
                             method: 'POST',
                             headers: {{'Content-Type': 'application/json'}},
@@ -1282,3 +1290,6 @@ class SXNGPlugin(Plugin):
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: {e}")
         return results
+
+
+
