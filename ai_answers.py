@@ -15,7 +15,7 @@ from markupsafe import Markup
 logger = logging.getLogger(__name__)
 
 TOKEN_EXPIRY_SEC = 3600
-STREAM_CHUNK_SIZE = 4096  # Increased from 128 for I/O efficiency
+STREAM_CHUNK_SIZE = 256
 STREAM_TIMEOUT_SEC = 60
 
 def _get_streaming_connection(url: str):
@@ -701,9 +701,15 @@ FRONTEND_JS_TEMPLATE = r"""
             if (!started && !collectedResponse.trim()) {
                 const cursor = data.querySelector('.sxng-cursor');
                 if (cursor) cursor.remove();
+                
                 const errSpan = document.createElement('span');
-                errSpan.style.color = '#bf616a';
-                errSpan.textContent = 'No response received. Check API configuration and server logs.';
+                if (thoughtDiv && thoughtDiv.textContent.trim().length > 0) {
+                    errSpan.style.color = '#ebcb8b';
+                    errSpan.textContent = 'Model provided reasoning but stopped before the final answer. Try adjusting token limits.';
+                } else {
+                    errSpan.style.color = '#bf616a';
+                    errSpan.textContent = 'No response received. Check API configuration and server logs.';
+                }
                 data.appendChild(errSpan);
                 return;
             }
@@ -1127,9 +1133,7 @@ class SXNGPlugin(Plugin):
 
 <CORE_DIRECTIVES>
 {numbered_instructions}
-</CORE_DIRECTIVES>
-
-<answer>"""
+</CORE_DIRECTIVES>"""
 
             def stream_gemini():
                 if '?' in self.endpoint_url:
@@ -1140,7 +1144,7 @@ class SXNGPlugin(Plugin):
                 conn = None
                 try:
                     conn, path = _get_streaming_connection(url)
-                    payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"maxOutputTokens": min(self.max_tokens * 4, 8192), "temperature": self.temperature, "stopSequences": ["</answer>"]}})
+                    payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"maxOutputTokens": min(self.max_tokens * 4, 8192), "temperature": self.temperature}})
                     conn.request("POST", path, body=payload, headers={"Content-Type": "application/json"})
                     res = conn.getresponse()
                      
@@ -1195,9 +1199,8 @@ class SXNGPlugin(Plugin):
                         "model": self.model,
                         "messages": [{"role": "user", "content": prompt}],
                         "stream": True,
-                        "max_tokens": min(self.max_tokens * 4, 8192),  # 4x headroom for reasoning models
-                        "temperature": self.temperature,
-                        "stop": ["</answer>"]
+                        "max_tokens": min(self.max_tokens * 4, 8192),
+                        "temperature": self.temperature
                     })
                     headers = {
                         "Content-Type": "application/json",
@@ -1218,55 +1221,50 @@ class SXNGPlugin(Plugin):
                         return
 
                     decoder = json.JSONDecoder()
-                    buffer = b""
                     tokens_yielded = 0
                     in_reasoning_block = False
+                    
                     while True:
-                        chunk = res.read(STREAM_CHUNK_SIZE)
-                        if not chunk: break
-                        buffer += chunk
-                        while b"\n" in buffer:
-                            line_bytes, buffer = buffer.split(b"\n", 1)
-                            line = line_bytes.decode('utf-8', errors='replace')
-                            if line.startswith("data: "):
-                                data_str = line[6:].strip()
-                                if data_str == "[DONE]":
+                        # Use readline() to unblock SSE streaming immediately
+                        line_bytes = res.readline()
+                        if not line_bytes: break
+                        
+                        line = line_bytes.decode('utf-8', errors='replace').strip()
+                        if not line: 
+                            continue
+                            
+                        if line.startswith("data: "):
+                            data_str = line[6:].strip()
+                            if data_str == "[DONE]":
+                                if in_reasoning_block:
+                                    yield "\n</think>\n\n"
+                                return
+                            try:
+                                obj, _ = decoder.raw_decode(data_str)
+                                choices = obj.get("choices", [])
+                                choice = choices[0] if choices else {}
+                                delta = choice.get("delta", {}) if isinstance(choice, dict) else {}
+                                reasoning = delta.get("reasoning_content", "")
+                                content = delta.get("content", "")
+                                
+                                if reasoning:
+                                    if not in_reasoning_block:
+                                        yield "<think>\n"
+                                        in_reasoning_block = True
+                                    yield reasoning
+                                    tokens_yielded += 1
+                                    
+                                if content:
                                     if in_reasoning_block:
                                         yield "\n</think>\n\n"
-                                    if tokens_yielded == 0:
-                                        logger.warning(f"{PLUGIN_NAME}: Stream completed but yielded 0 tokens.")
-                                    return
-                                try:
-                                    obj, _ = decoder.raw_decode(data_str)
-                                    choices = obj.get("choices", [])
-                                    choice = choices[0] if choices else {}
-                                    delta = choice.get("delta", {}) if isinstance(choice, dict) else {}
-                                    reasoning = delta.get("reasoning_content", "")
-                                    content = delta.get("content", "")
-                                    
-                                    if reasoning:
-                                        if not in_reasoning_block:
-                                            yield "<think>\n"
-                                            in_reasoning_block = True
-                                        yield reasoning
-                                        tokens_yielded += 1
-                                        
-                                    if content:
-                                        if in_reasoning_block:
-                                            yield "\n</think>\n\n"
-                                            in_reasoning_block = False
-                                        yield content
-                                        tokens_yielded += 1
-                                except json.JSONDecodeError as e:
-                                    if data_str.strip():
-                                        logger.debug(f"{PLUGIN_NAME}: Upstream JSON parse error: {e} | Payload: {data_str[:200]}")
-                                    pass
+                                        in_reasoning_block = False
+                                    yield content
+                                    tokens_yielded += 1
+                            except json.JSONDecodeError:
+                                pass
                     
-                    # automatically inject closure bounds upon upstream socket failure.
                     if in_reasoning_block:
                         yield "\n</think>\n\n"
-                    if tokens_yielded == 0:
-                        logger.warning(f"{PLUGIN_NAME}: Stream disconnected abruptly and yielded 0 tokens.")
                 except Exception as e:
                     logger.error(f"{PLUGIN_NAME}: {self.provider} stream error: {e}")
                 finally:
