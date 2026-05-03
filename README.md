@@ -38,6 +38,7 @@ Configure via the environment variables:
 
 - `LLM_MODEL`: Model identifier. Defaults vary. Recommended: 10-30B dense or 5-15B MoE activated.
 - `LLM_URL`: Overrides endpoint URL for any provider preset.
+- `LLM_SYSTEM_PROMPT`: Overrides some of the system prompt. Default `You are a direct, citation-accurate search synthesis engine.`.
 - `LLM_MAX_TOKENS`: Default `500`.
 - `LLM_TEMPERATURE`: Default `0.2`.
 - `LLM_CONTEXT_DEEP_COUNT`: results as context with full snippets. Default `5`.
@@ -105,6 +106,5 @@ LLM_MODEL=meta-llama/Meta-Llama-3-8B-Instruct
 
 ```bash
 pip install flask flask-babel
-python tests/demo.py   # Interactive demo at localhost:5000
-python tests/test.py   # One-shot test suite
+python tests/demo.py   # UI demo at localhost:5000
 ```

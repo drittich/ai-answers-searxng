@@ -8,13 +8,14 @@ except ImportError:
 from flask import Response, request, abort, jsonify
 from searx.plugins import Plugin, PluginInfo
 from searx.result_types import EngineResults
+from searx import settings
 from flask_babel import gettext
 from markupsafe import Markup
 
 logger = logging.getLogger(__name__)
 
 TOKEN_EXPIRY_SEC = 3600
-STREAM_CHUNK_SIZE = 128
+STREAM_CHUNK_SIZE = 4096  # Increased from 128 for I/O efficiency
 STREAM_TIMEOUT_SEC = 60
 
 def _get_streaming_connection(url: str):
@@ -55,7 +56,7 @@ PROVIDER_PRESETS = {
     'huggingface': {'url': 'https://api-inference.huggingface.co/models/{model}/v1/chat/completions', 'model': 'meta-llama/Meta-Llama-3-8B-Instruct'}
 }
 
-# UI assets (inlined for single-file install)
+# UI assets
 
 INTERACTIVE_CSS = '''
                         @keyframes sxng-fade-in-up {
@@ -163,6 +164,15 @@ INTERACTIVE_CSS = '''
                         }
                         .sxng-input-submit svg { width: 18px; height: 18px; fill: currentColor; }
                         .sxng-input-submit svg { width: 18px; height: 18px; fill: currentColor; }
+                        .sxng-reasoning {
+                            margin: 0.5rem 0; padding: 0.5rem;
+                            border-left: 2px solid var(--color-result-link, #5e81ac);
+                            background: var(--color-base-background-hover, rgba(0,0,0,0.03));
+                            font-size: 0.85rem; opacity: 0.7; transition: opacity 0.2s;
+                        }
+                        .sxng-reasoning:hover { opacity: 1; }
+                        .sxng-reasoning summary { cursor: pointer; font-weight: bold; color: var(--color-result-link, #5e81ac); }
+                        .sxng-thought-content { margin-top: 0.5rem; white-space: pre-wrap; font-family: monospace; }
 '''
 
 INTERACTIVE_HTML = '''
@@ -240,9 +250,9 @@ CITATION_HELPER_JS = r'''
 INTERACTIVE_JS = r'''
                         const footer = document.getElementById('sxng-footer');
                         const input = document.getElementById('sxng-action-input');
-                        // Inherited from outer scope: box, data, conversation
+                        // Closure inheritance: box, data, conversation references injected from outer scope.
 
-                        // Theme detection: inherit host accent color
+                        // Dynamic theme propagation: extract and bind host CSS variables for UI cohesion.
                         if (window.getComputedStyle && box) {
                             try {
                                 const docStyles = getComputedStyle(document.documentElement);
@@ -260,7 +270,7 @@ INTERACTIVE_JS = r'''
                             } catch(e) {}
                         }
 
-                        // Persist conversation state to URL hash (stateless)
+                        // Stateless persistence: encode conversation matrix as base64 URL fragment.
                         const updateState = () => {
                             try {
                                 const state = {
@@ -292,7 +302,7 @@ INTERACTIVE_JS = r'''
                                         ts: 0
                                     }));
                                     
-                                    // Helper function to inject citations into text
+                                    // Citation rendering proxy
                                     const injectCitations = (text) => {
                                         return renderCitations(text, urls);
                                     };
@@ -310,7 +320,7 @@ INTERACTIVE_JS = r'''
                                                 data.appendChild(clr);
                                             }
                                         } else {
-                                            // Inject citations for assistant responses
+                                            // Execute citation routing for synthesized payload
                                             data.appendChild(injectCitations(turn.content));
                                         }
                                     });
@@ -372,10 +382,10 @@ INTERACTIVE_JS = r'''
                                 const synthesized = synthesizeQuery(q_init, val);
                                 let auxContext = null;
                                 try {
-                                    const auxData = await fetch('/ai-auxiliary-search', {
+                                    const auxData = await fetch(script_root + '/ai-auxiliary-search', {
                                         method: 'POST',
                                         headers: {'Content-Type': 'application/json'},
-                                        body: JSON.stringify({query: synthesized, lang: lang_init, offset: urls.length})
+                                        body: JSON.stringify({query: synthesized, lang: lang_init, offset: urls.length, tk: tk_init})
                                     }).then(r => r.json());
                                     if (auxData.context) {
                                         const originalBackground = conversation.originalContext.substring(0, 1500);
@@ -416,6 +426,327 @@ INTERACTIVE_JS = r'''
                         };
 '''
 
+FRONTEND_JS_TEMPLATE = r"""
+(async () => {
+    const is_interactive = __IS_INTERACTIVE__;
+    const q_init = __JS_Q__;
+    const lang_init = __JS_LANG__;
+    let urls = __JS_URLS__;
+    const b64_init = __B64_CONTEXT__;
+    const tk_init = __TK__;
+    const script_root = __SCRIPT_ROOT__;
+    const conversation = {
+        originalQuery: q_init,
+        originalContext: new TextDecoder().decode(Uint8Array.from(atob(b64_init), c => c.charCodeAt(0))),
+        originalSources: [...urls],
+        turns: [{role: 'user', content: q_init, ts: Date.now()}]
+    };
+    const box = document.getElementById('sxng-stream-box');
+    const data = document.getElementById('sxng-stream-data');
+    const wrapper = box.closest('.answer');
+    if (wrapper) wrapper.style.display = 'none';
+    let restored = false;
+    let isStreaming = false;
+    
+    __CITATION_HELPER_JS__
+
+    __INTERACTIVE_JS_INIT__
+
+    function synthesizeQuery(original, followup) {
+        // Strip deterministic NLP prefixes to isolate primary entities
+        const cleanOrig = original.replace(/^(what|how|why|when|where|who|which|is|are|can|does|do)(\s+(is|are|do|does|can|to|a|an|the))?\s+/i, '');
+        const origWords = cleanOrig.split(' ').slice(0, 12);
+        return `${origWords.join(' ')} ${followup}`.trim();
+    }
+
+    __STREAM_FN_SIG__ {
+        if (isStreaming) {
+            console.warn('[AI Answers] Stream already in progress, ignoring duplicate call');
+            return;
+        }
+        
+        isStreaming = true;
+        try {
+            const ctx = auxContext || conversation.originalContext;
+            if (wrapper) wrapper.style.display = '';
+            box.style.display = 'block';
+
+            const controller = new AbortController();
+            let timeoutId = setTimeout(() => controller.abort(), 60000);
+            const finalQ = __STREAM_Q__;
+            
+            const bodyObj = { q: finalQ, lang: lang_init, context: ctx, tk: tk_init__STREAM_BODY__ };
+            const res = await fetch(script_root + '/ai-stream', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(bodyObj),
+                signal: controller.signal
+            });
+
+            clearTimeout(timeoutId);
+            if (!res.ok) {
+                const errSpan = document.createElement('span');
+                errSpan.style.color = '#bf616a';
+                errSpan.textContent = "Error: " + res.statusText;
+                data.appendChild(errSpan);
+                return;
+            }
+
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let cursor = data.querySelector('.sxng-cursor');
+            if (!cursor) {
+                cursor = document.createElement('span');
+                cursor.className = 'sxng-cursor';
+                data.appendChild(cursor);
+            }
+
+            let started = false;
+            let pendingSpace = '';
+            let lastScrollKick = 0;
+            let collectedResponse = '';
+            let isThinking = false, thoughtDiv = null;
+
+            let buffer = '';
+            const flushBuffer = (force = false) => {
+                if (!buffer) return;
+                
+                if (force) {
+                    const fragment = renderCitations(buffer, urls);
+                    if (cursor) cursor.before(fragment);
+                    else data.appendChild(fragment);
+                    buffer = '';
+                    return;
+                }
+
+                while (true) {
+                    const match = buffer.match(/(\[\d+(?:,\s*\d+)*\])/);
+                    
+                    if (!match) break;
+                    
+                    const preText = buffer.substring(0, match.index);
+                    if (preText) {
+                        const s = document.createElement('span');
+                        s.className = 'sxng-chunk';
+                        s.textContent = preText;
+                        cursor.before(s);
+                    }
+
+                    const citationText = match[0];
+                    const fragment = renderCitations(citationText, urls);
+                    cursor.before(fragment);
+
+                    buffer = buffer.substring(match.index + match[0].length);
+                }
+
+                const openIdx = buffer.lastIndexOf('[');
+                if (openIdx === -1) {
+                    if (buffer) {
+                        const s = document.createElement('span');
+                        s.className = 'sxng-chunk';
+                        s.textContent = buffer;
+                        cursor.before(s);
+                        buffer = '';
+                    }
+                } else {
+                    const safeChunk = buffer.substring(0, openIdx);
+                    if (safeChunk) {
+                        const s = document.createElement('span');
+                        s.className = 'sxng-chunk';
+                        s.textContent = safeChunk;
+                        cursor.before(s);
+                    }
+                    buffer = buffer.substring(openIdx);
+                    
+                    if (buffer.length > 50) {
+                        const s = document.createElement('span');
+                        s.className = 'sxng-chunk';
+                        s.textContent = buffer[0];
+                        cursor.before(s);
+                        buffer = buffer.substring(1);
+                    }
+                }
+            };
+
+            let streamBuffer = '';
+            while (true) {
+                const {done, value} = await reader.read();
+                if (done) break;
+
+                clearTimeout(timeoutId);
+                timeoutId = setTimeout(() => controller.abort(), 60000);
+
+                const chunk = decoder.decode(value, {stream: true});
+                if (!chunk) continue;
+                
+                streamBuffer += chunk;
+                
+                // Truncation suspension: prevent evaluation of fragmented SGML tags at chunk boundaries.
+                if (streamBuffer.match(/<\/?(?:t(?:h(?:i(?:n(?:k)?)?)?)?)?$/)) {
+                    continue; 
+                }
+
+                // Deterministic tag extraction: mitigate infinite recursion on malformed stream boundaries.
+                while (true) {
+                    const openIdx = streamBuffer.indexOf('<think>');
+                    const closeIdx = streamBuffer.indexOf('</think>');
+                    
+                    if (openIdx === -1 && closeIdx === -1) break;
+
+                    if (!isThinking) {
+                        if (openIdx !== -1 && (closeIdx === -1 || openIdx < closeIdx)) {
+                            const preTag = streamBuffer.substring(0, openIdx);
+                            if (preTag) {
+                                if (!started) {
+                                    const trimmed = preTag.replace(/^[\s.,;:!?]+/, '');
+                                    if (trimmed || collectedResponse.trim()) {
+                                        if (cursor && !cursor.isConnected) data.appendChild(cursor);
+                                        started = true;
+                                    }
+                                }
+                                if (started) {
+                                    buffer += preTag;
+                                    flushBuffer(false);
+                                }
+                                collectedResponse += preTag;
+                            }
+                            isThinking = true;
+                            const details = document.createElement('details');
+                            details.className = 'sxng-reasoning';
+                            details.innerHTML = '<summary>Thought Process</summary>';
+                            thoughtDiv = document.createElement('div');
+                            thoughtDiv.className = 'sxng-thought-content';
+                            details.appendChild(thoughtDiv);
+                            (cursor ? cursor.before(details) : data.appendChild(details));
+                            
+                            streamBuffer = streamBuffer.substring(openIdx + 7);
+                        } else {
+                            // Recover from hallucinated tag boundaries without blocking execution.
+                            streamBuffer = streamBuffer.replace('</think>', '');
+                        }
+                    } else {
+                        if (closeIdx !== -1 && (openIdx === -1 || closeIdx < openIdx)) {
+                            const thoughtText = streamBuffer.substring(0, closeIdx);
+                            if (thoughtDiv) thoughtDiv.textContent += thoughtText;
+                            isThinking = false;
+                            streamBuffer = streamBuffer.substring(closeIdx + 8);
+                        } else {
+                            // Drop anomalous nested tag states.
+                            streamBuffer = streamBuffer.replace('<think>', '');
+                        }
+                    }
+                }
+
+                // Evaluate remainder of validated buffer
+                if (streamBuffer.length > 0) {
+                    if (isThinking && thoughtDiv) {
+                        thoughtDiv.textContent += streamBuffer;
+                    } else {
+                        if (!started) {
+                            const trimmed = streamBuffer.replace(/^[\s.,;:!?]+/, '');
+                            if (trimmed || collectedResponse.trim()) {
+                                if (cursor && !cursor.isConnected) data.appendChild(cursor);
+                                started = true;
+                            }
+                        }
+                        if (started) {
+                            buffer += streamBuffer;
+                            flushBuffer(false);
+                        }
+                        // Guarantee absolute isolation between reasoning output and presentation payload.
+                        collectedResponse += streamBuffer; 
+                    }
+                    streamBuffer = ''; // Flush consumed buffer chunk
+                }
+
+                const now = Date.now();
+                if (now - lastScrollKick > 500) {
+                    lastScrollKick = now;
+                    void window.getComputedStyle(data).opacity;
+                }
+            }
+            
+            // Reconcile and flush suspended artifacts trailing an abruptly terminated stream.
+            if (streamBuffer.length > 0) {
+                // Strip invalid partial SGML fragments.
+                streamBuffer = streamBuffer.replace(/<\/?(?:t(?:h(?:i(?:n(?:k)?)?)?)?)?$/, '');
+                if (streamBuffer.length > 0) {
+                    if (isThinking && thoughtDiv) {
+                        thoughtDiv.textContent += streamBuffer;
+                    } else {
+                        buffer += streamBuffer;
+                        collectedResponse += streamBuffer;
+                    }
+                }
+            }
+            
+            // Finalize remaining character outputs.
+            flushBuffer(true);
+            
+            if (cursor) cursor.remove();
+
+            // Dom-tree cleanup: trim residual whitespace nodes.
+            let last = data.lastChild;
+            while (last) {
+                if (last.textContent && last.textContent.trim().length === 0) {
+                    const prev = last.previousSibling;
+                    last.remove();
+                    last = prev;
+                } else {
+                    if (last.textContent) last.textContent = last.textContent.trimEnd();
+                    break;
+                }
+            }
+
+            if (!started && !collectedResponse.trim()) {
+                const cursor = data.querySelector('.sxng-cursor');
+                if (cursor) cursor.remove();
+                const errSpan = document.createElement('span');
+                errSpan.style.color = '#bf616a';
+                errSpan.textContent = 'No response received. Check API configuration and server logs.';
+                data.appendChild(errSpan);
+                return;
+            }
+
+            __INTERACTIVE_JS_COMPLETE__
+
+            if (collectedResponse) {
+                conversation.turns.push({role: 'assistant', content: collectedResponse.trim(), ts: Date.now()});
+            }
+
+        } catch (e) {
+            console.error('[AI Answers] Fatal stream exception:', e);
+            const errSpan = document.createElement('span');
+            errSpan.style.cssText = 'color: #bf616a; font-weight: bold; display: block; margin-top: 0.5rem;';
+            
+            if (e.name === 'AbortError') {
+                errSpan.textContent = "⚠️ Connection to AI provider timed out.";
+            } else {
+                errSpan.textContent = "⚠️ AI Widget encountered a fatal error. Check browser console.";
+            }
+            
+            if (data) {
+                const cursor = data.querySelector('.sxng-cursor');
+                if (cursor) cursor.remove();
+                data.appendChild(errSpan);
+            }
+        } finally {
+            // Deallocate stream lock state unconditionally.
+            isStreaming = false;
+        }
+    }
+
+    // Initialize background connection warmup execution.
+    fetch(script_root + '/ai-stream', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({warmup: true}),
+        keepalive: true
+    }).catch(() => {});
+
+    if (!restored) startStream();
+})();
+"""
 
 import typing
 if typing.TYPE_CHECKING:
@@ -439,10 +770,6 @@ class SXNGPlugin(Plugin):
 
 
     def _ollama_unload_model(self) -> None:
-        """
-        Force-unload an Ollama model after a response by calling the native /api/chat endpoint:
-          {"model": "...", "messages": [], "keep_alive": 0}
-        """
         try:
             if self.provider != 'ollama':
                 return
@@ -455,18 +782,18 @@ class SXNGPlugin(Plugin):
             conn = None
             try:
                 conn, path = _get_streaming_connection(unload_url)
+                conn.timeout = 2.0 
                 payload = json.dumps({
                     "model": self.model,
                     "messages": [],
                     "keep_alive": 0
                 })
                 headers = {"Content-Type": "application/json"}
-                # Optional: if Ollama is behind auth, reuse LLM_KEY
                 if self.api_key and self.api_key not in ('none', 'ollama'):
                     headers["Authorization"] = f"Bearer {self.api_key}"
                 conn.request("POST", path, body=payload, headers=headers)
                 res = conn.getresponse()
-                res.read()  # drain
+                res.read()
                 if res.status >= 400:
                     logger.warning(f"{PLUGIN_NAME}: Ollama unload failed: {res.status} {res.reason}")
             finally:
@@ -496,7 +823,7 @@ class SXNGPlugin(Plugin):
             elif 'huggingface.co' in url_lower:
                 raw_provider = 'huggingface'
             else:
-                # Unknown URL fallback to OpenAI-compatible
+                # fallback to OpenAI-compatible
                 raw_provider = 'openai'
                 logger.info(f"{PLUGIN_NAME}: Using OpenAI-compatible mode for custom URL")
         
@@ -521,20 +848,24 @@ class SXNGPlugin(Plugin):
         self.model = os.getenv('LLM_MODEL', preset['model']).strip()
 
         try:
-            self.max_tokens = int(os.getenv('LLM_MAX_TOKENS', 500))
+            self.max_tokens = max(1, int(os.getenv('LLM_MAX_TOKENS', 500)))
         except ValueError:
+            logger.warning(f"{PLUGIN_NAME}: Invalid LLM_MAX_TOKENS value. Enforcing default (500).")
             self.max_tokens = 500
         try:
             self.temperature = float(os.getenv('LLM_TEMPERATURE', 0.2))
         except ValueError:
+            logger.warning(f"{PLUGIN_NAME}: Invalid LLM_TEMPERATURE value. Enforcing default (0.2).")
             self.temperature = 0.2
         try:
             self.context_deep_count = max(0, int(os.getenv('LLM_CONTEXT_DEEP_COUNT', 5)))
         except ValueError:
+            logger.warning(f"{PLUGIN_NAME}: Invalid LLM_CONTEXT_DEEP_COUNT value. Enforcing default (5).")
             self.context_deep_count = 5
         try:
             self.context_shallow_count = max(0, int(os.getenv('LLM_CONTEXT_SHALLOW_COUNT', 15)))
         except ValueError:
+            logger.warning(f"{PLUGIN_NAME}: Invalid LLM_CONTEXT_SHALLOW_COUNT value. Enforcing default (15).")
             self.context_shallow_count = 15
 
         self.allowed_tabs = set(t.strip() for t in os.getenv('LLM_TABS', DEFAULT_TABS).split(','))
@@ -548,9 +879,6 @@ class SXNGPlugin(Plugin):
             raw_url = f"https://{raw_url}"
         self.endpoint_url = raw_url
         
-
-        # Ollama: optional "unload after response" (frees VRAM between queries).
-        # Enable with: LLM_OLLAMA_UNLOAD_AFTER=true
         self.ollama_unload_after = os.getenv('LLM_OLLAMA_UNLOAD_AFTER', 'false').lower().strip() in ('true', '1', 'yes', 'on')
         self.ollama_unload_url = ''
         if self.provider == 'ollama' and self.ollama_unload_after:
@@ -563,10 +891,10 @@ class SXNGPlugin(Plugin):
                 self.ollama_unload_url = f"{scheme}://{netloc}/api/chat"
             except Exception:
                 self.ollama_unload_url = "http://localhost:11434/api/chat"
-        if self.api_key:
-            self.secret = os.getenv('SXNG_LLM_SECRET') or hashlib.sha256(self.api_key.encode()).hexdigest()
-        else:
-             self.secret = os.getenv('SXNG_LLM_SECRET', '')
+        server_secret = settings.get('server', {}).get('secret_key', '')
+        self.secret = hashlib.sha256(f"ai_answers_{server_secret}".encode()).hexdigest()
+        
+        self.system_prompt = os.getenv('LLM_SYSTEM_PROMPT', '').strip()
 
     def _parse_aux_results(self, raw_results, raw_infoboxes, raw_answers):
         results = []
@@ -598,13 +926,15 @@ class SXNGPlugin(Plugin):
                 'attributes': ib.get('attributes', [])
             })
             
-        # Only extract simple Answer types (skip Translations, WeatherAnswer etc.)
         answers = []
         for a in list(raw_answers)[:2]:
+            ans_text = ""
             if hasattr(a, 'answer') and isinstance(getattr(a, 'answer', None), str):
-                answers.append(a.answer)
+                ans_text = a.answer
             elif isinstance(a, dict) and a.get('answer'):
-                answers.append(str(a['answer']))
+                ans_text = str(a['answer'])
+            if ans_text and 'id="sxng-stream-box"' not in ans_text and not ans_text.strip().startswith('<'):
+                answers.append(ans_text)
                    
         return results, infoboxes, answers
 
@@ -620,6 +950,16 @@ class SXNGPlugin(Plugin):
                 abort(403)
             
             data = request.json or {}
+            token = data.get('tk', '')
+            
+            # Cryptographic Access Control
+            try:
+                ts, sig = token.rsplit('.', 1)
+                expected = hashlib.sha256(f"{ts}{self.secret}".encode()).hexdigest()
+                if sig != expected or (time.time() - float(ts)) > TOKEN_EXPIRY_SEC:
+                    abort(403)
+            except (ValueError, KeyError, AttributeError):
+                abort(403)
             query = data.get('query', '').strip()
             lang = data.get('lang', 'all')
             categories = data.get('categories', 'general')
@@ -627,7 +967,6 @@ class SXNGPlugin(Plugin):
             if not query:
                 return jsonify({'results': []})
             
-            # Direct kernel access (bypasses HTTP loopback)
             try:
                 from searx.search import SearchWithPlugins
                 from searx.search.models import SearchQuery
@@ -649,7 +988,6 @@ class SXNGPlugin(Plugin):
                     lang=lang,
                     pageno=1,
                 )
-                # Empty plugins list prevents recursion
                 search_obj = SearchWithPlugins(sq, request, user_plugins=[])
                 result_container = search_obj.search()
                 
@@ -708,9 +1046,11 @@ class SXNGPlugin(Plugin):
                         'query': query
                     })
                 except Exception as e:
-                    return jsonify({'results': [], 'error': str(e)})
+                    logger.error(f"{PLUGIN_NAME}: Auxiliary search HTTP fallback failed: {e}")
+                    return jsonify({'results': [], 'error': str(e)}), 500
             except Exception as e:
-                return jsonify({'results': [], 'error': str(e)})
+                logger.error(f"{PLUGIN_NAME}: Auxiliary search loopback failed: {e}")
+                return jsonify({'results': [], 'error': str(e)}), 500
 
         @app.route('/ai-stream', methods=['POST'])
         def handle_ai_stream():
@@ -740,7 +1080,8 @@ class SXNGPlugin(Plugin):
             target_words = int(self.max_tokens * 0.4)
             lang_instruction = f" Respond in {lang}." if lang not in ('all', 'auto') else ""
 
-            SYSTEM = f"You are a direct, citation-accurate search synthesis engine. Today is {today}.{lang_instruction}"
+            base_sys = self.system_prompt if self.system_prompt else "You are a direct, citation-accurate search synthesis engine."
+            SYSTEM = f"{base_sys} Today is {today}.{lang_instruction}"
             max_source_idx = 0
             if context_text:
                 indices = re.findall(r'\[(\d+)\]', context_text)
@@ -799,7 +1140,7 @@ class SXNGPlugin(Plugin):
                 conn = None
                 try:
                     conn, path = _get_streaming_connection(url)
-                    payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"maxOutputTokens": self.max_tokens, "temperature": self.temperature, "stopSequences": ["</answer>"]}})
+                    payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"maxOutputTokens": min(self.max_tokens * 4, 8192), "temperature": self.temperature, "stopSequences": ["</answer>"]}})
                     conn.request("POST", path, body=payload, headers={"Content-Type": "application/json"})
                     res = conn.getresponse()
                      
@@ -810,13 +1151,23 @@ class SXNGPlugin(Plugin):
                         return
 
                     decoder = json.JSONDecoder()
+                    utf8_decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
                     buffer = ""
                     while True:
                         chunk = res.read(STREAM_CHUNK_SIZE)
-                        if not chunk: break
-                        buffer += chunk.decode('utf-8', errors='replace')
+                        if not chunk: 
+                            buffer += utf8_decoder.decode(b'', final=True)
+                            break
+                        buffer += utf8_decoder.decode(chunk)
                         while buffer:
                             buffer = buffer.lstrip()
+                            if buffer.startswith('['):
+                                buffer = buffer[1:].lstrip()
+                            elif buffer.startswith(','):
+                                buffer = buffer[1:].lstrip()
+                            elif buffer.startswith(']'):
+                                buffer = buffer[1:].lstrip()
+                                
                             if not buffer: break
                             try:
                                 obj, idx = decoder.raw_decode(buffer)
@@ -844,7 +1195,7 @@ class SXNGPlugin(Plugin):
                         "model": self.model,
                         "messages": [{"role": "user", "content": prompt}],
                         "stream": True,
-                        "max_tokens": self.max_tokens,
+                        "max_tokens": min(self.max_tokens * 4, 8192),  # 4x headroom for reasoning models
                         "temperature": self.temperature,
                         "stop": ["</answer>"]
                     })
@@ -868,6 +1219,8 @@ class SXNGPlugin(Plugin):
 
                     decoder = json.JSONDecoder()
                     buffer = b""
+                    tokens_yielded = 0
+                    in_reasoning_block = False
                     while True:
                         chunk = res.read(STREAM_CHUNK_SIZE)
                         if not chunk: break
@@ -877,22 +1230,49 @@ class SXNGPlugin(Plugin):
                             line = line_bytes.decode('utf-8', errors='replace')
                             if line.startswith("data: "):
                                 data_str = line[6:].strip()
-                                if data_str == "[DONE]": return
+                                if data_str == "[DONE]":
+                                    if in_reasoning_block:
+                                        yield "\n</think>\n\n"
+                                    if tokens_yielded == 0:
+                                        logger.warning(f"{PLUGIN_NAME}: Stream completed but yielded 0 tokens.")
+                                    return
                                 try:
                                     obj, _ = decoder.raw_decode(data_str)
-                                    content = obj.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                                    if content: yield content
-                                except json.JSONDecodeError:
+                                    choices = obj.get("choices", [])
+                                    choice = choices[0] if choices else {}
+                                    delta = choice.get("delta", {}) if isinstance(choice, dict) else {}
+                                    reasoning = delta.get("reasoning_content", "")
+                                    content = delta.get("content", "")
+                                    
+                                    if reasoning:
+                                        if not in_reasoning_block:
+                                            yield "<think>\n"
+                                            in_reasoning_block = True
+                                        yield reasoning
+                                        tokens_yielded += 1
+                                        
+                                    if content:
+                                        if in_reasoning_block:
+                                            yield "\n</think>\n\n"
+                                            in_reasoning_block = False
+                                        yield content
+                                        tokens_yielded += 1
+                                except json.JSONDecodeError as e:
+                                    if data_str.strip():
+                                        logger.debug(f"{PLUGIN_NAME}: Upstream JSON parse error: {e} | Payload: {data_str[:200]}")
                                     pass
+                    
+                    # automatically inject closure bounds upon upstream socket failure.
+                    if in_reasoning_block:
+                        yield "\n</think>\n\n"
+                    if tokens_yielded == 0:
+                        logger.warning(f"{PLUGIN_NAME}: Stream disconnected abruptly and yielded 0 tokens.")
                 except Exception as e:
                     logger.error(f"{PLUGIN_NAME}: {self.provider} stream error: {e}")
                 finally:
                     if conn: conn.close()
 
             generator = stream_gemini if self.is_gemini else stream_openai_compatible
-
-
-            # Force-unload Ollama model after stream via keep_alive=0
 
             if self.provider == 'ollama' and getattr(self, 'ollama_unload_after', False):
 
@@ -916,12 +1296,11 @@ class SXNGPlugin(Plugin):
             })
         return True
 
-    def _assemble_context(self, raw_results, infoboxes, answers, offset=0) -> tuple[str, list]:
+    def _assemble_context(self, clean_results, infoboxes, answers, offset=0) -> tuple[str, list]:
         """Builds context string from normalized search data. Returns (context_str, urls)."""
         context_parts = []
         result_urls = []
         
-        # Knowledge graph
         knowledge_graph_lines = []
         for ib in infoboxes:
             ib_name = ib.get('name', '') or ib.get('infobox', '') or ib.get('title', '')
@@ -946,32 +1325,30 @@ class SXNGPlugin(Plugin):
         if knowledge_graph_lines:
             context_parts.append("KNOWLEDGE GRAPH:\n" + "\n".join(knowledge_graph_lines))
         
-        # Deep sources: full content
         deep_lines = []
-        for i, r in enumerate(raw_results[:self.context_deep_count]):
-            url = getattr(r, 'url', '') if hasattr(r, 'url') else r.get('url', '')
+        for i, r in enumerate(clean_results[:self.context_deep_count]):
+            url = r.get('url', '')
             result_urls.append(url)
             domain = urlparse(url).netloc.replace('www.', '')
-            date = getattr(r, 'publishedDate', '') if hasattr(r, 'publishedDate') else r.get('publishedDate')
-            date_str = f" ({date})" if date else ""
-            title = (getattr(r, 'title', '') if hasattr(r, 'title') else r.get('title') or "").replace('\n', ' ').strip()
-            content = str(getattr(r, 'content', '') if hasattr(r, 'content') else r.get('content', '')).replace('\n', ' ').strip()[:800]
+            date_str = f" ({r.get('publishedDate')})" if r.get('publishedDate') else ""
+            title = r.get('title', '').replace('\n', ' ').strip()
+            content = str(r.get('content', '')).replace('\n', ' ').strip()[:800]
             idx = i + 1 + offset
             deep_lines.append(f"[{idx}] {domain}{date_str}: {title}: {content}")
         
         if deep_lines:
             context_parts.append("DEEP SOURCES:\n" + "\n".join(deep_lines))
             
-        # Shallow sources: headlines only
+        # Low-latency headline heuristics
         if self.context_shallow_count > 0:
             shallow_lines = []
             start_idx = self.context_deep_count
             end_idx = self.context_deep_count + self.context_shallow_count
-            for i, r in enumerate(raw_results[start_idx:end_idx]):
-                url = getattr(r, 'url', '') if hasattr(r, 'url') else r.get('url', '')
+            for i, r in enumerate(clean_results[start_idx:end_idx]):
+                url = r.get('url', '')
                 result_urls.append(url)
                 domain = urlparse(url).netloc.replace('www.', '')
-                title = (getattr(r, 'title', '') if hasattr(r, 'title') else r.get('title') or '').replace('\n', ' ').strip()[:60]
+                title = r.get('title', '').replace('\n', ' ').strip()[:60]
                 idx = i + 1 + start_idx + offset
                 shallow_lines.append(f"[{idx}] {domain}: {title}")
             
@@ -1003,9 +1380,8 @@ class SXNGPlugin(Plugin):
             raw_answers = getattr(search.result_container, 'answers', [])
             
             # Normalize for unified context assembly
-            _, infoboxes, answers = self._parse_aux_results(raw_results, raw_infoboxes, raw_answers)
-            context_str, _ = self._assemble_context(raw_results, infoboxes, answers)
-
+            clean_results, infoboxes, answers = self._parse_aux_results(raw_results, raw_infoboxes, raw_answers)
+            context_str, _ = self._assemble_context(clean_results, infoboxes, answers)
 
             ts = str(int(time.time()))
             q_clean = search.search_query.query.strip()
@@ -1013,11 +1389,21 @@ class SXNGPlugin(Plugin):
             sig = hashlib.sha256(f"{ts}{self.secret}".encode()).hexdigest()
             tk = f"{ts}.{sig}"
             
+            # XSS & Syntax Prevention: Safely serialize data for inline <script> injection
+            safe_json = lambda x: json.dumps(x).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
+            
             b64_context = base64.b64encode(context_str.encode('utf-8')).decode('utf-8')
-            js_q = json.dumps(q_clean)
-            js_lang = json.dumps(lang)
             total_context_count = self.context_deep_count + self.context_shallow_count
-            js_urls = json.dumps([getattr(r, 'url', '') if hasattr(r, 'url') else r.get('url', '') for r in raw_results[:total_context_count]])
+            
+            # Use clean_results here!
+            raw_urls = [r.get('url', '') for r in clean_results[:total_context_count]]
+            
+            js_q = safe_json(q_clean)
+            js_lang = safe_json(lang)
+            js_urls = safe_json(raw_urls)
+            js_b64_context = safe_json(b64_context)
+            js_tk = safe_json(tk)
+            js_script_root = safe_json((request.script_root if request else '').rstrip('/'))
 
             is_interactive = self.interactive
             
@@ -1029,8 +1415,23 @@ class SXNGPlugin(Plugin):
             stream_fn_sig = 'async function startStream(overrideQ = null, prevAnswer = null, auxContext = null)'
             stream_q = 'overrideQ || q_init' if is_interactive else 'q_init'
             stream_body = f'''prev_answer: prevAnswer''' if is_interactive else ''
+            
+            js_code = FRONTEND_JS_TEMPLATE \
+                .replace("__IS_INTERACTIVE__", 'true' if is_interactive else 'false') \
+                .replace("__TK__", js_tk) \
+                .replace("__SCRIPT_ROOT__", js_script_root) \
+                .replace("__CITATION_HELPER_JS__", CITATION_HELPER_JS) \
+                .replace("__INTERACTIVE_JS_INIT__", interactive_js_init) \
+                .replace("__STREAM_FN_SIG__", stream_fn_sig) \
+                .replace("__STREAM_Q__", stream_q) \
+                .replace("__STREAM_BODY__", ', ' + stream_body if stream_body else '') \
+                .replace("__INTERACTIVE_JS_COMPLETE__", interactive_js_complete) \
+                .replace("__JS_LANG__", js_lang) \
+                .replace("__JS_URLS__", js_urls) \
+                .replace("__B64_CONTEXT__", js_b64_context) \
+                .replace("__JS_Q__", js_q)
 
-            html_payload = rf'''
+            html_payload = f'''
                 <article id="sxng-stream-box" class="answer" style="display:none; margin: 1rem 0;">
                     <style>
                         @keyframes sxng-fade-pulse {{
@@ -1069,227 +1470,7 @@ class SXNGPlugin(Plugin):
                     <p id="sxng-stream-data" style="white-space: pre-wrap; color: var(--color-result-description); font-size: 0.95rem; margin:0;"><span class="sxng-cursor"></span></p>
                     {interactive_html}
                     <script>
-                    (async () => {{
-                        const is_interactive = {'true' if is_interactive else 'false'};
-                        const q_init = {js_q};
-                        const lang_init = {js_lang};
-                        let urls = {js_urls};
-                        const b64_init = "{b64_context}";
-                        const tk_init = "{tk}";
-                        const conversation = {{
-                            originalQuery: q_init,
-                            originalContext: new TextDecoder().decode(Uint8Array.from(atob(b64_init), c => c.charCodeAt(0))),
-                            originalSources: [...urls],
-                            turns: [{{role: 'user', content: q_init, ts: Date.now()}}]
-                        }};
-                        const box = document.getElementById('sxng-stream-box');
-                        const data = document.getElementById('sxng-stream-data');
-                        const wrapper = box.closest('.answer');
-                        if (wrapper) wrapper.style.display = 'none';
-                        let restored = false;
-                        let isStreaming = false;
-                        
-                        {CITATION_HELPER_JS}
-
-                        {interactive_js_init}
-                        function synthesizeQuery(original, followup) {{
-                            // Strip generic question starters
-                            const cleanOrig = original.replace(/^(what|how|why|when|where|who|which|is|are|can|does|do)(\s+(is|are|do|does|can|to|a|an|the))?\s+/i, '');
-                            const origWords = cleanOrig.split(' ').slice(0, 12);
-                            return `${{origWords.join(' ')}} ${{followup}}`.trim();
-                        }}
-
-
-
-                        {stream_fn_sig} {{
-                            if (isStreaming) {{
-                                console.warn('[AI Answers] Stream already in progress, ignoring duplicate call');
-                                return;
-                            }}
-                            
-                            isStreaming = true;
-                            try {{
-                                const ctx = auxContext || conversation.originalContext;
-                                if (wrapper) wrapper.style.display = '';
-                                box.style.display = 'block';
-
-                                const controller = new AbortController();
-                                const timeoutId = setTimeout(() => controller.abort(), 60000);
-                                const finalQ = {stream_q};
-                                
-                                const bodyObj = {{ q: finalQ, lang: lang_init, context: ctx, tk: tk_init{', ' + stream_body if stream_body else ''} }};
-                                const res = await fetch('/ai-stream', {{
-                                    method: 'POST',
-                                    headers: {{ 'Content-Type': 'application/json' }},
-                                    body: JSON.stringify(bodyObj),
-                                    signal: controller.signal
-                                }});
-
-                                clearTimeout(timeoutId);
-                                if (!res.ok) {{
-                                    const errSpan = document.createElement('span');
-                                    errSpan.style.color = '#bf616a';
-                                    errSpan.textContent = "Error: " + res.statusText;
-                                    data.appendChild(errSpan);
-                                    return;
-                                }}
-
-                                const reader = res.body.getReader();
-                                const decoder = new TextDecoder();
-                                let cursor = data.querySelector('.sxng-cursor');
-                                if (!cursor) {{
-                                    cursor = document.createElement('span');
-                                    cursor.className = 'sxng-cursor';
-                                    data.appendChild(cursor);
-                                }}
-
-                                let started = false;
-                                let pendingSpace = '';
-                                let lastScrollKick = 0;
-                                let collectedResponse = '';
-
-                                let buffer = '';
-                                const flushBuffer = (force = false) => {{
-                                    if (!buffer) return;
-                                    
-                                    if (force) {{
-                                        const fragment = renderCitations(buffer, urls);
-                                        if (cursor) cursor.before(fragment);
-                                        else data.appendChild(fragment);
-                                        buffer = '';
-                                        return;
-                                    }}
-
-                                    while (true) {{
-                                        const match = buffer.match(/(\[\d+(?:,\s*\d+)*\])/);
-                                        
-                                        if (!match) break;
-                                        
-                                        const preText = buffer.substring(0, match.index);
-                                        if (preText) {{
-                                            const s = document.createElement('span');
-                                            s.className = 'sxng-chunk';
-                                            s.textContent = preText;
-                                            cursor.before(s);
-                                        }}
-
-                                        const citationText = match[0];
-                                        const fragment = renderCitations(citationText, urls);
-                                        cursor.before(fragment);
-
-                                        buffer = buffer.substring(match.index + match[0].length);
-                                    }}
-
-                                    const openIdx = buffer.lastIndexOf('[');
-                                    if (openIdx === -1) {{
-                                        if (buffer) {{
-                                            const s = document.createElement('span');
-                                            s.className = 'sxng-chunk';
-                                            s.textContent = buffer;
-                                            cursor.before(s);
-                                            buffer = '';
-                                        }}
-                                    }} else {{
-                                        const safeChunk = buffer.substring(0, openIdx);
-                                        if (safeChunk) {{
-                                            const s = document.createElement('span');
-                                            s.className = 'sxng-chunk';
-                                            s.textContent = safeChunk;
-                                            cursor.before(s);
-                                        }}
-                                        buffer = buffer.substring(openIdx);
-                                        
-                                        if (buffer.length > 50) {{
-                                            const s = document.createElement('span');
-                                            s.className = 'sxng-chunk';
-                                            s.textContent = buffer[0];
-                                            cursor.before(s);
-                                            buffer = buffer.substring(1);
-                                        }}
-                                    }}
-                                }};
-
-                                while (true) {{
-                                    const {{done, value}} = await reader.read();
-                                    if (done) break;
-
-                                    const chunk = decoder.decode(value, {{stream: true}});
-                                    if (chunk) {{
-                                        collectedResponse += chunk;
-                                        
-                                        // Initial scroll/focus logic (only once)
-                                        if (!started) {{
-                                            const trimmed = chunk.replace(/^[\\s.,;:!?]+/, '');
-                                            if (!trimmed && !collectedResponse.trim()) continue; // Skip leading garbage
-                                            if (cursor && !cursor.isConnected) data.appendChild(cursor);
-                                            started = true;
-                                        }}
-
-                                        buffer += chunk;
-                                        flushBuffer(false);
-
-                                        const now = Date.now();  // Periodic repaint for mobile
-                                        if (now - lastScrollKick > 500) {{
-                                            lastScrollKick = now;
-                                            void window.getComputedStyle(data).opacity;
-                                        }}
-                                    }}
-                                }}
-                                
-                                // Final flush of any partial text (e.g. unclosed brackets)
-                                flushBuffer(true);
-                                
-                                if (cursor) cursor.remove();
-
-                                // Cleanup trailing newlines
-                                let last = data.lastChild;
-                                while (last) {{
-                                    if (last.textContent && last.textContent.trim().length === 0) {{
-                                        const prev = last.previousSibling;
-                                        last.remove();
-                                        last = prev;
-                                    }} else {{
-                                        if (last.textContent) last.textContent = last.textContent.trimEnd();
-                                        break;
-                                    }}
-                                }}
-
-      if (!started && !collectedResponse.trim()) {{
-        const cursor = data.querySelector('.sxng-cursor');
-        if (cursor) cursor.remove();
-        const errSpan = document.createElement('span');
-        errSpan.style.color = '#bf616a';
-        errSpan.textContent = 'No response received. Check API configuration and server logs.';
-        data.appendChild(errSpan);
-        return;
-      }}
-
-                                {interactive_js_complete}
-
-                                if (collectedResponse) {{
-                                    conversation.turns.push({{role: 'assistant', content: collectedResponse.trim(), ts: Date.now()}});
-                                }}
-
-                            }} catch (e) {{
-                                console.error(e);
-                                if (box.parentElement) box.parentElement.remove();
-                                else box.remove();
-                            }} finally {{
-                                // Always release lock, even on error
-                                isStreaming = false;
-                            }}
-                        }}
-
-                        // Warmup
-                        fetch('/ai-stream', {{
-                            method: 'POST',
-                            headers: {{'Content-Type': 'application/json'}},
-                            body: JSON.stringify({{warmup: true}}),
-                            keepalive: true
-                        }}).catch(() => {{}});
-
-                        if (!restored) startStream();
-                    }})();
+                    {js_code}
                     </script>
                 </article>
             '''
@@ -1297,6 +1478,3 @@ class SXNGPlugin(Plugin):
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: {e}")
         return results
-
-
-
