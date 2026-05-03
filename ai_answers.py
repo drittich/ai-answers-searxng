@@ -4,7 +4,7 @@ from searx import network
 try:
     from searx.network import get_network
 except ImportError:
-    get_network = None  # Graceful fallback for test/demo environments
+    get_network = None
 from flask import Response, request, abort, jsonify
 from searx.plugins import Plugin, PluginInfo
 from searx.result_types import EngineResults
@@ -15,7 +15,7 @@ from markupsafe import Markup
 logger = logging.getLogger(__name__)
 
 TOKEN_EXPIRY_SEC = 3600
-STREAM_CHUNK_SIZE = 256
+STREAM_CHUNK_SIZE = 512
 STREAM_TIMEOUT_SEC = 60
 
 def _get_streaming_connection(url: str):
@@ -204,7 +204,6 @@ CITATION_HELPER_JS = r'''
                                 if (match.index > lastIdx) {
                                     const s = document.createElement('span');
                                     s.className = 'sxng-chunk';
-                                    // Preserve whitespace by not trimming
                                     s.textContent = text.substring(lastIdx, match.index);
                                     fragment.appendChild(s);
                                 }
@@ -250,9 +249,6 @@ CITATION_HELPER_JS = r'''
 INTERACTIVE_JS = r'''
                         const footer = document.getElementById('sxng-footer');
                         const input = document.getElementById('sxng-action-input');
-                        // Closure inheritance: box, data, conversation references injected from outer scope.
-
-                        // Dynamic theme propagation: extract and bind host CSS variables for UI cohesion.
                         if (window.getComputedStyle && box) {
                             try {
                                 const docStyles = getComputedStyle(document.documentElement);
@@ -270,17 +266,32 @@ INTERACTIVE_JS = r'''
                             } catch(e) {}
                         }
 
-                        // Stateless persistence: encode conversation matrix as base64 URL fragment.
+                        // conversation saved as base64 URL fragment.
                         const updateState = () => {
                             try {
-                                const state = {
+                                let state = {
                                     t: conversation.turns.map(t => ({
                                         r: t.role === 'user' ? 'u' : 'a',
                                         c: t.content.replace(/\s+/g, ' ').trim()
                                     })),
                                     u: urls
                                 };
-                                const b64 = btoa(encodeURIComponent(JSON.stringify(state)).replace(/%([0-9A-F]{2})/g, (m,p)=>String.fromCharCode('0x'+p)));
+                                const encodeB64 = (obj) => {
+                                    const u8 = new TextEncoder().encode(JSON.stringify(obj));
+                                    let bin = '';
+                                    // Use a loop to avoid RangeError: Maximum call stack size exceeded
+                                    for (let i = 0; i < u8.byteLength; i++) {
+                                        bin += String.fromCharCode(u8[i]);
+                                    }
+                                    return btoa(bin);
+                                };
+                                
+                                let b64 = encodeB64(state);
+                                while (b64.length > 2000 && state.t.length > 2) {
+                                    state.t.splice(1, 2); // Delete in Q&A pairs
+                                    b64 = encodeB64(state);
+                                }
+                                
                                 history.replaceState(null, null, '#ai=' + b64);
                             } catch(e) {}
                         };
@@ -288,7 +299,8 @@ INTERACTIVE_JS = r'''
                         if (location.hash.includes('ai=')) {
                             try {
                                 const b64 = location.hash.split('ai=')[1];
-                                const json = decodeURIComponent(atob(b64).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
+                                const uint8 = new Uint8Array(atob(b64).split('').map(c => c.charCodeAt(0)));
+                                const json = new TextDecoder().decode(uint8);
                                 const state = JSON.parse(json);
                                 if (state.t && state.t.length > 0) {
                                     // Restore URLs for citation indexing
@@ -302,7 +314,6 @@ INTERACTIVE_JS = r'''
                                         ts: 0
                                     }));
                                     
-                                    // Citation rendering proxy
                                     const injectCitations = (text) => {
                                         return renderCitations(text, urls);
                                     };
@@ -320,7 +331,6 @@ INTERACTIVE_JS = r'''
                                                 data.appendChild(clr);
                                             }
                                         } else {
-                                            // Execute citation routing for synthesized payload
                                             data.appendChild(injectCitations(turn.content));
                                         }
                                     });
@@ -343,10 +353,26 @@ INTERACTIVE_JS = r'''
                             setTimeout(() => btn.innerHTML = originalContent, 2000);
                         };
 
-                        document.getElementById('btn-regen').onclick = () => {
+                        document.getElementById('btn-regen').onclick = async () => {
                             data.innerHTML = '<span class="sxng-cursor"></span>';
                             footer.style.display = 'none';
-                            startStream();
+                            
+                            if (conversation.turns.length > 0 && conversation.turns[conversation.turns.length - 1].role === 'assistant') {
+                                conversation.turns.pop();
+                            }
+                            
+                            updateState();
+                            
+                            if (conversation.turns.length <= 1) {
+                                await startStream();
+                            } else {
+                                const val = conversation.turns[conversation.turns.length - 1].content;
+                                const currentText = conversation.turns.slice(0, -1).slice(-6)
+                                    .map(t => (t.role === 'user' ? 'Q' : 'A') + ': ' + t.content)
+                                    .join('\\n\\n');
+                                await startStream(val, currentText);
+                            }
+                            updateState();
                         };
 
                         const handleAction = async (e) => {
@@ -417,13 +443,6 @@ INTERACTIVE_JS = r'''
                                 input.scrollIntoView({behavior: 'smooth', block: 'center'});
                             }, 300);
                         };
-
-                        const _origStream = startStream;
-                        startStream = async function(...args) {
-                            if (args.length === 0 && restored) return;
-                            await _origStream.apply(this, args);
-                            if (args.length === 0) updateState();
-                        };
 '''
 
 FRONTEND_JS_TEMPLATE = r"""
@@ -453,7 +472,6 @@ FRONTEND_JS_TEMPLATE = r"""
     __INTERACTIVE_JS_INIT__
 
     function synthesizeQuery(original, followup) {
-        // Strip deterministic NLP prefixes to isolate primary entities
         const cleanOrig = original.replace(/^(what|how|why|when|where|who|which|is|are|can|does|do)(\s+(is|are|do|does|can|to|a|an|the))?\s+/i, '');
         const origWords = cleanOrig.split(' ').slice(0, 12);
         return `${origWords.join(' ')} ${followup}`.trim();
@@ -502,8 +520,6 @@ FRONTEND_JS_TEMPLATE = r"""
             }
 
             let started = false;
-            let pendingSpace = '';
-            let lastScrollKick = 0;
             let collectedResponse = '';
             let isThinking = false, thoughtDiv = null;
 
@@ -581,12 +597,10 @@ FRONTEND_JS_TEMPLATE = r"""
                 
                 streamBuffer += chunk;
                 
-                // Truncation suspension: prevent evaluation of fragmented SGML tags at chunk boundaries.
                 if (streamBuffer.match(/<\/?(?:t(?:h(?:i(?:n(?:k)?)?)?)?)?$/)) {
                     continue; 
                 }
 
-                // Deterministic tag extraction: mitigate infinite recursion on malformed stream boundaries.
                 while (true) {
                     const openIdx = streamBuffer.indexOf('<think>');
                     const closeIdx = streamBuffer.indexOf('</think>');
@@ -621,7 +635,6 @@ FRONTEND_JS_TEMPLATE = r"""
                             
                             streamBuffer = streamBuffer.substring(openIdx + 7);
                         } else {
-                            // Recover from hallucinated tag boundaries without blocking execution.
                             streamBuffer = streamBuffer.replace('</think>', '');
                         }
                     } else {
@@ -631,13 +644,11 @@ FRONTEND_JS_TEMPLATE = r"""
                             isThinking = false;
                             streamBuffer = streamBuffer.substring(closeIdx + 8);
                         } else {
-                            // Drop anomalous nested tag states.
                             streamBuffer = streamBuffer.replace('<think>', '');
                         }
                     }
                 }
 
-                // Evaluate remainder of validated buffer
                 if (streamBuffer.length > 0) {
                     if (isThinking && thoughtDiv) {
                         thoughtDiv.textContent += streamBuffer;
@@ -653,22 +664,13 @@ FRONTEND_JS_TEMPLATE = r"""
                             buffer += streamBuffer;
                             flushBuffer(false);
                         }
-                        // Guarantee absolute isolation between reasoning output and presentation payload.
                         collectedResponse += streamBuffer; 
                     }
-                    streamBuffer = ''; // Flush consumed buffer chunk
-                }
-
-                const now = Date.now();
-                if (now - lastScrollKick > 500) {
-                    lastScrollKick = now;
-                    void window.getComputedStyle(data).opacity;
+                    streamBuffer = '';
                 }
             }
             
-            // Reconcile and flush suspended artifacts trailing an abruptly terminated stream.
             if (streamBuffer.length > 0) {
-                // Strip invalid partial SGML fragments.
                 streamBuffer = streamBuffer.replace(/<\/?(?:t(?:h(?:i(?:n(?:k)?)?)?)?)?$/, '');
                 if (streamBuffer.length > 0) {
                     if (isThinking && thoughtDiv) {
@@ -680,12 +682,10 @@ FRONTEND_JS_TEMPLATE = r"""
                 }
             }
             
-            // Finalize remaining character outputs.
             flushBuffer(true);
             
             if (cursor) cursor.remove();
 
-            // Dom-tree cleanup: trim residual whitespace nodes.
             let last = data.lastChild;
             while (last) {
                 if (last.textContent && last.textContent.trim().length === 0) {
@@ -719,6 +719,11 @@ FRONTEND_JS_TEMPLATE = r"""
             if (collectedResponse) {
                 conversation.turns.push({role: 'assistant', content: collectedResponse.trim(), ts: Date.now()});
             }
+            
+            // Save state if this was an initial generation or a regeneration
+            if (arguments.length === 0 && typeof updateState === 'function') {
+                updateState();
+            }
 
         } catch (e) {
             console.error('[AI Answers] Fatal stream exception:', e);
@@ -737,18 +742,9 @@ FRONTEND_JS_TEMPLATE = r"""
                 data.appendChild(errSpan);
             }
         } finally {
-            // Deallocate stream lock state unconditionally.
             isStreaming = false;
         }
     }
-
-    // Initialize background connection warmup execution.
-    fetch(script_root + '/ai-stream', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({warmup: true}),
-        keepalive: true
-    }).catch(() => {});
 
     if (!restored) startStream();
 })();
@@ -829,7 +825,6 @@ class SXNGPlugin(Plugin):
             elif 'huggingface.co' in url_lower:
                 raw_provider = 'huggingface'
             else:
-                # fallback to OpenAI-compatible
                 raw_provider = 'openai'
                 logger.info(f"{PLUGIN_NAME}: Using OpenAI-compatible mode for custom URL")
         
@@ -906,7 +901,7 @@ class SXNGPlugin(Plugin):
         results = []
         limit = self.context_deep_count + self.context_shallow_count
         for r in raw_results[:limit]:
-            # Handle both MainResult (attribute access) and LegacyResult (dict access)
+            # MainResult (attribute access) and LegacyResult (dict access)
             if hasattr(r, 'title'):
                 results.append({
                     'title': getattr(r, 'title', ''),
@@ -923,12 +918,12 @@ class SXNGPlugin(Plugin):
                     'publishedDate': r.get('publishedDate', '')
                 })
 
-        # SearXNG already merges infoboxes by ID - take first with full content
+        # SearXNG already merges infoboxes by ID, use first
         infoboxes = []
         for ib in raw_infoboxes[:1]:
             infoboxes.append({
                 'name': ib.get('infobox', '') or ib.get('title', ''),
-                'content': ib.get('content', '')[:2000],
+                'content': str(ib.get('content') or '')[:2000],
                 'attributes': ib.get('attributes', [])
             })
             
@@ -958,7 +953,7 @@ class SXNGPlugin(Plugin):
             data = request.json or {}
             token = data.get('tk', '')
             
-            # Cryptographic Access Control
+            # Token access control
             try:
                 ts, sig = token.rsplit('.', 1)
                 expected = hashlib.sha256(f"{ts}{self.secret}".encode()).hexdigest()
@@ -1014,55 +1009,13 @@ class SXNGPlugin(Plugin):
                     'query': query
                 })
 
-            except ImportError:
-                try:
-                    search_url = f'{request.url_root}search'
-                    params = {
-                        'q': query,
-                        'format': 'json',
-                        'categories': categories,
-                        'language': lang
-                    }
-                    
-                    headers = {
-                        'X-AI-Auxiliary': '1',
-                        'Accept-Language': request.headers.get('Accept-Language', '')
-                    }
-                    
-                    
-                    res = network.get(search_url, params=params, headers=headers, timeout=2)
-                    search_data = res.json()
-                        
-                    
-
-                    results, infoboxes, answers = self._parse_aux_results(
-                        search_data.get('results', []),
-                        search_data.get('infoboxes', []),
-                        search_data.get('answers', [])
-                    )
-                    
-                    context_str, new_urls = self._assemble_context(results, infoboxes, answers, offset)
-
-                    return jsonify({
-                        'context': context_str,
-                        'new_urls': new_urls,
-                        'results': results, 
-                        'infoboxes': infoboxes,
-                        'answers': answers,
-                        'query': query
-                    })
-                except Exception as e:
-                    logger.error(f"{PLUGIN_NAME}: Auxiliary search HTTP fallback failed: {e}")
-                    return jsonify({'results': [], 'error': str(e)}), 500
             except Exception as e:
-                logger.error(f"{PLUGIN_NAME}: Auxiliary search loopback failed: {e}")
-                return jsonify({'results': [], 'error': str(e)}), 500
+                logger.error(f"{PLUGIN_NAME}: Aux search failed: {e}")
+                return jsonify({'results': [], 'error': 'Search failed'}), 500
 
         @app.route('/ai-stream', methods=['POST'])
         def handle_ai_stream():
             data = request.json or {}
-            if data.get('warmup'):
-                return Response('', status=204)
             
             token = data.get('tk', '')
             q = data.get('q', '')
@@ -1145,7 +1098,7 @@ class SXNGPlugin(Plugin):
                 try:
                     conn, path = _get_streaming_connection(url)
                     payload = json.dumps({"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"maxOutputTokens": min(self.max_tokens * 4, 8192), "temperature": self.temperature}})
-                    conn.request("POST", path, body=payload, headers={"Content-Type": "application/json"})
+                    conn.request("POST", path, body=payload.encode('utf-8'), headers={"Content-Type": "application/json"})
                     res = conn.getresponse()
                      
                     if res.status != 200:
@@ -1177,17 +1130,48 @@ class SXNGPlugin(Plugin):
                                 obj, idx = decoder.raw_decode(buffer)
                                 items = obj if isinstance(obj, list) else [obj]
                                 for item in items:
-                                    candidates = item.get('candidates', [])
-                                    if candidates:
-                                        content = candidates[0].get('content', {})
-                                        parts = content.get('parts', [])
-                                        if parts:
-                                            text = parts[0].get('text', '')
-                                            if text: yield text
+                                    if not isinstance(item, dict):
+                                        continue
+                                    
+                                    if 'promptFeedback' in item and item['promptFeedback'].get('blockReason'):
+                                        yield f"\n⚠️ Gemini blocked prompt. Reason: {item['promptFeedback']['blockReason']}\n"
+                                        return
+                                        
+                                    candidates = item.get('candidates')
+                                    if not isinstance(candidates, list) or len(candidates) == 0:
+                                        continue
+                                        
+                                    first_candidate = candidates[0]
+                                    if not isinstance(first_candidate, dict):
+                                        continue
+                                    
+                                    if first_candidate.get('finishReason') == 'SAFETY':
+                                        yield "\n⚠️ Gemini stopped generation due to safety filters.\n"
+                                        return
+                                        
+                                    content = first_candidate.get('content')
+                                    if not isinstance(content, dict):
+                                        continue
+                                        
+                                    parts = content.get('parts')
+                                    if not isinstance(parts, list) or len(parts) == 0:
+                                        continue
+                                        
+                                    first_part = parts[0]
+                                    if isinstance(first_part, dict):
+                                        text = first_part.get('text')
+                                        if text and isinstance(text, str):
+                                            yield text
+                                            
                                 buffer = buffer[idx:]
-                            except json.JSONDecodeError: break
+                            except json.JSONDecodeError: 
+                                break
+                            except Exception as parse_err:
+                                logger.debug(f"{PLUGIN_NAME}: Ignored malformed Gemini chunk. Error: {parse_err}")
+                                break
                 except Exception as e:
                     logger.error(f"{PLUGIN_NAME}: Gemini stream error: {e}")
+                    yield f"\n⚠️ Connection Error: {e}\n"
                 finally:
                     if conn: conn.close()
 
@@ -1204,6 +1188,7 @@ class SXNGPlugin(Plugin):
                     })
                     headers = {
                         "Content-Type": "application/json",
+                        "Accept": "text/event-stream",
                         "HTTP-Referer": "https://github.com/searxng/searxng",
                         "X-Title": "SearXNG"
                     }
@@ -1211,7 +1196,7 @@ class SXNGPlugin(Plugin):
                         headers['api-key'] = self.api_key
                     else:
                         headers['Authorization'] = f"Bearer {self.api_key}"
-                    conn.request("POST", path, body=payload, headers=headers)
+                    conn.request("POST", path, body=payload.encode('utf-8'), headers=headers)
                     res = conn.getresponse()
 
                     if res.status != 200:
@@ -1221,11 +1206,9 @@ class SXNGPlugin(Plugin):
                         return
 
                     decoder = json.JSONDecoder()
-                    tokens_yielded = 0
                     in_reasoning_block = False
                     
                     while True:
-                        # Use readline() to unblock SSE streaming immediately
                         line_bytes = res.readline()
                         if not line_bytes: break
                         
@@ -1241,32 +1224,52 @@ class SXNGPlugin(Plugin):
                                 return
                             try:
                                 obj, _ = decoder.raw_decode(data_str)
-                                choices = obj.get("choices", [])
-                                choice = choices[0] if choices else {}
-                                delta = choice.get("delta", {}) if isinstance(choice, dict) else {}
-                                reasoning = delta.get("reasoning_content", "")
-                                content = delta.get("content", "")
+                                if not isinstance(obj, dict):
+                                    continue
                                 
-                                if reasoning:
+                                # Catch upstream errors
+                                if "error" in obj:
+                                    err_msg = obj["error"].get("message", str(obj["error"])) if isinstance(obj["error"], dict) else str(obj["error"])
+                                    yield f"\n⚠️ API Error: {err_msg}\n"
+                                    return
+                                    
+                                choices = obj.get("choices")
+                                if not isinstance(choices, list) or len(choices) == 0:
+                                    continue
+                                    
+                                choice = choices[0]
+                                if not isinstance(choice, dict):
+                                    continue
+                                    
+                                delta = choice.get("delta")
+                                if not isinstance(delta, dict):
+                                    continue
+                                
+                                reasoning = delta.get("reasoning_content")
+                                content = delta.get("content")
+                                
+                                if reasoning and isinstance(reasoning, str):
                                     if not in_reasoning_block:
                                         yield "<think>\n"
                                         in_reasoning_block = True
                                     yield reasoning
-                                    tokens_yielded += 1
                                     
-                                if content:
+                                if content and isinstance(content, str):
                                     if in_reasoning_block:
                                         yield "\n</think>\n\n"
                                         in_reasoning_block = False
                                     yield content
-                                    tokens_yielded += 1
                             except json.JSONDecodeError:
+                                pass
+                            except Exception as parse_err:
+                                logger.debug(f"{PLUGIN_NAME}: Ignored malformed OpenAI chunk. Error: {parse_err}")
                                 pass
                     
                     if in_reasoning_block:
                         yield "\n</think>\n\n"
                 except Exception as e:
                     logger.error(f"{PLUGIN_NAME}: {self.provider} stream error: {e}")
+                    yield f"\n⚠️ Connection Error: {e}\n"
                 finally:
                     if conn: conn.close()
 
@@ -1288,9 +1291,7 @@ class SXNGPlugin(Plugin):
             return Response(generator(), mimetype='text/event-stream', headers={
                 'X-Accel-Buffering': 'no',
                 'Cache-Control': 'no-cache, no-store',
-                'Connection': 'keep-alive',
-                'Transfer-Encoding': 'chunked',
-                'Content-Encoding': 'identity',
+                'Connection': 'keep-alive'
             })
         return True
 
@@ -1337,7 +1338,6 @@ class SXNGPlugin(Plugin):
         if deep_lines:
             context_parts.append("DEEP SOURCES:\n" + "\n".join(deep_lines))
             
-        # Low-latency headline heuristics
         if self.context_shallow_count > 0:
             shallow_lines = []
             start_idx = self.context_deep_count
@@ -1377,7 +1377,6 @@ class SXNGPlugin(Plugin):
             raw_infoboxes = getattr(search.result_container, 'infoboxes', [])
             raw_answers = getattr(search.result_container, 'answers', [])
             
-            # Normalize for unified context assembly
             clean_results, infoboxes, answers = self._parse_aux_results(raw_results, raw_infoboxes, raw_answers)
             context_str, _ = self._assemble_context(clean_results, infoboxes, answers)
 
@@ -1387,13 +1386,12 @@ class SXNGPlugin(Plugin):
             sig = hashlib.sha256(f"{ts}{self.secret}".encode()).hexdigest()
             tk = f"{ts}.{sig}"
             
-            # XSS & Syntax Prevention: Safely serialize data for inline <script> injection
+            # XSS blocking
             safe_json = lambda x: json.dumps(x).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
             
             b64_context = base64.b64encode(context_str.encode('utf-8')).decode('utf-8')
             total_context_count = self.context_deep_count + self.context_shallow_count
             
-            # Use clean_results here!
             raw_urls = [r.get('url', '') for r in clean_results[:total_context_count]]
             
             js_q = safe_json(q_clean)
