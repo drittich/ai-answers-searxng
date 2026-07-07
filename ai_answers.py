@@ -59,17 +59,20 @@ PROVIDER_PRESETS = {
 # UI assets
 
 INTERACTIVE_CSS = '''
-                        @keyframes sxng-fade-in-up {
-                            0% { opacity: 0; transform: translateY(10px); }
-                            100% { opacity: 1; transform: translateY(0); }
-                        }
                         .sxng-footer {
                             display: flex;
                             align-items: center;
                             gap: 0.5rem;
                             margin-top: 0.5rem;
+                            /* visibility keeps the footer in flow (reserves its height) so
+                               revealing it on completion never shifts the layout */
+                            visibility: hidden;
                             opacity: 0;
-                            animation: sxng-fade-in-up 0.5s ease-out forwards;
+                            transition: opacity 0.4s ease, visibility 0.4s ease;
+                        }
+                        .sxng-footer.sxng-ready {
+                            visibility: visible;
+                            opacity: 1;
                         }
                         .sxng-btn {
                             display: inline-flex;
@@ -176,7 +179,7 @@ INTERACTIVE_CSS = '''
 '''
 
 INTERACTIVE_HTML = '''
-                    <div id="sxng-footer" class="sxng-footer" style="display:none;">
+                    <div id="sxng-footer" class="sxng-footer">
                         <button class="sxng-btn" id="btn-copy" title="Copy to clipboard">
                             <svg viewBox="0 0 24 24"><path d="M16 1H4C2.9 1 2 1.9 2 3V17H4V3H16V1M19 5H8C6.9 5 6 5.9 6 7V21C6 22.1 6.9 23 8 23H19C20.1 23 21 22.1 21 21V7C21 5.9 20.1 5 19 5M19 21H8V7H19V21Z"/></svg>
                         </button>
@@ -334,9 +337,8 @@ INTERACTIVE_JS = r'''
                                             data.appendChild(injectCitations(turn.content));
                                         }
                                     });
-                                    box.style.display = 'block';
-                                    if(wrapper) wrapper.style.display = '';
-                                    if(footer && is_interactive) footer.style.display = 'flex';
+                                    if(footer && is_interactive) footer.classList.add('sxng-ready');
+                                    updateShowMore();
                                     restored = true;
                                 }
                             } catch(e) { console.warn('Restore failed', e); }
@@ -355,7 +357,8 @@ INTERACTIVE_JS = r'''
 
                         document.getElementById('btn-regen').onclick = async () => {
                             data.innerHTML = '<span class="sxng-cursor"></span>';
-                            footer.style.display = 'none';
+                            footer.classList.remove('sxng-ready');
+                            expandAnswer();
                             
                             if (conversation.turns.length > 0 && conversation.turns[conversation.turns.length - 1].role === 'assistant') {
                                 conversation.turns.pop();
@@ -388,7 +391,8 @@ INTERACTIVE_JS = r'''
 
                             input.value = '';
                             input.blur();
-                            footer.style.display = 'none';
+                            footer.classList.remove('sxng-ready');
+                            expandAnswer();
 
                             if (val) {
                                 const cursor = data.querySelector('.sxng-cursor');
@@ -460,12 +464,30 @@ FRONTEND_JS_TEMPLATE = r"""
         originalSources: [...urls],
         turns: [{role: 'user', content: q_init, ts: Date.now()}]
     };
+    const is_collapsed = __IS_COLLAPSED__;
     const box = document.getElementById('sxng-stream-box');
     const data = document.getElementById('sxng-stream-data');
-    const wrapper = box.closest('.answer');
-    if (wrapper) wrapper.style.display = 'none';
+    const answerWrap = document.getElementById('sxng-answer-wrap');
+    const showMoreWrap = document.getElementById('sxng-show-more-wrap');
     let restored = false;
     let isStreaming = false;
+
+    function expandAnswer() {
+        if (answerWrap) answerWrap.classList.remove('sxng-collapsed');
+        if (showMoreWrap) showMoreWrap.classList.remove('sxng-visible');
+    }
+    function updateShowMore() {
+        if (!is_collapsed || !answerWrap || !showMoreWrap) return;
+        if (!answerWrap.classList.contains('sxng-collapsed')) return;
+        if (answerWrap.scrollHeight > answerWrap.clientHeight + 4) {
+            showMoreWrap.classList.add('sxng-visible');
+        } else {
+            // Content fits within the reserved height: release it (only ever shrinks).
+            expandAnswer();
+        }
+    }
+    const showMoreBtn = document.getElementById('sxng-show-more');
+    if (showMoreBtn) showMoreBtn.onclick = expandAnswer;
     
     __CITATION_HELPER_JS__
 
@@ -486,8 +508,6 @@ FRONTEND_JS_TEMPLATE = r"""
         isStreaming = true;
         try {
             const ctx = auxContext || conversation.originalContext;
-            if (wrapper) wrapper.style.display = '';
-            box.style.display = 'block';
 
             const controller = new AbortController();
             let timeoutId = setTimeout(() => controller.abort(), 60000);
@@ -743,6 +763,7 @@ FRONTEND_JS_TEMPLATE = r"""
             }
         } finally {
             isStreaming = false;
+            updateShowMore();
         }
     }
 
@@ -806,6 +827,7 @@ class SXNGPlugin(Plugin):
 
     def _load_config(self):
         self.interactive = os.getenv('LLM_INTERACTIVE', 'true').lower().strip() in ('true', '1', 'yes', 'on')
+        self.collapsed = os.getenv('LLM_COLLAPSED', 'true').lower().strip() in ('true', '1', 'yes', 'on')
         self.question_mark_required = os.getenv('LLM_QUESTION_MARK_REQUIRED', 'false').lower().strip() in ('true', '1', 'yes', 'on')
         raw_provider = os.getenv('LLM_PROVIDER', '').lower().strip()
         
@@ -1431,13 +1453,14 @@ class SXNGPlugin(Plugin):
             interactive_html = INTERACTIVE_HTML if is_interactive else ''
             interactive_js_init = INTERACTIVE_JS if is_interactive else ''
 
-            interactive_js_complete = "footer.style.display = 'flex';" if is_interactive else ''
+            interactive_js_complete = "footer.classList.add('sxng-ready');" if is_interactive else ''
             stream_fn_sig = 'async function startStream(overrideQ = null, prevAnswer = null, auxContext = null)'
             stream_q = 'overrideQ || q_init' if is_interactive else 'q_init'
             stream_body = f'''prev_answer: prevAnswer''' if is_interactive else ''
             
             js_code = FRONTEND_JS_TEMPLATE \
                 .replace("__IS_INTERACTIVE__", 'true' if is_interactive else 'false') \
+                .replace("__IS_COLLAPSED__", 'true' if self.collapsed else 'false') \
                 .replace("__TK__", js_tk) \
                 .replace("__SCRIPT_ROOT__", js_script_root) \
                 .replace("__CITATION_HELPER_JS__", CITATION_HELPER_JS) \
@@ -1451,8 +1474,13 @@ class SXNGPlugin(Plugin):
                 .replace("__B64_CONTEXT__", js_b64_context) \
                 .replace("__JS_Q__", js_q)
 
+            collapsed_class = 'sxng-collapsed' if self.collapsed else ''
+            show_more_html = ('<div id="sxng-show-more-wrap" class="sxng-show-more-wrap">'
+                              '<button id="sxng-show-more" class="sxng-show-more-btn" type="button">Show more</button>'
+                              '</div>') if self.collapsed else ''
+
             html_payload = f'''
-                <article id="sxng-stream-box" class="answer" style="display:none; margin: 1rem 0;">
+                <article id="sxng-stream-box" class="answer" style="margin: 1rem 0;">
                     <style>
                         @keyframes sxng-fade-pulse {{
                             0%, 100% {{ opacity: 0.1; }}
@@ -1485,9 +1513,43 @@ class SXNGPlugin(Plugin):
                                 animation: sxng-fade-in 0.3s ease-out;
                             }}
                         }}
+                        #sxng-answer-wrap.sxng-collapsed {{
+                            /* fixed height from first paint through completion: zero layout shift */
+                            height: 7rem;
+                            overflow: hidden;
+                        }}
+                        .sxng-show-more-wrap {{
+                            height: 2rem;
+                            display: flex;
+                            align-items: center;
+                            opacity: 0;
+                            pointer-events: none;
+                            transition: opacity 0.3s ease;
+                        }}
+                        .sxng-show-more-wrap.sxng-visible {{
+                            opacity: 1;
+                            pointer-events: auto;
+                        }}
+                        .sxng-show-more-btn {{
+                            background: transparent;
+                            border: 1px solid var(--color-result-link, #5e81ac);
+                            color: var(--color-result-link, #5e81ac);
+                            border-radius: 6px;
+                            padding: 0.15rem 0.7rem;
+                            font-size: 0.85rem;
+                            cursor: pointer;
+                            opacity: 0.85;
+                        }}
+                        .sxng-show-more-btn:hover {{
+                            opacity: 1;
+                            background: var(--color-base-background-hover, rgba(0,0,0,0.05));
+                        }}
                         {interactive_css}
                     </style>
-                    <p id="sxng-stream-data" style="white-space: pre-wrap; color: var(--color-result-description); font-size: 0.95rem; margin:0;"><span class="sxng-cursor"></span></p>
+                    <div id="sxng-answer-wrap" class="{collapsed_class}">
+                        <p id="sxng-stream-data" style="white-space: pre-wrap; color: var(--color-result-description); font-size: 0.95rem; margin:0;"><span class="sxng-cursor"></span></p>
+                    </div>
+                    {show_more_html}
                     {interactive_html}
                     <script>
                     {js_code}
