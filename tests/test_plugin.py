@@ -337,6 +337,7 @@ def test_post_search_injects_answer(make_plugin):
     assert len(search.result_container.answers) == 1
     html = list(search.result_container.answers)[0]
     assert 'id="sxng-stream-box"' in html
+    assert 'AI Overview' in html
     assert '__' not in html.replace('__proto__', ''), "unsubstituted JS placeholders remain"
     assert 'sxng-collapsed' in html
 

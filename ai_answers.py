@@ -1593,6 +1593,21 @@ class SXNGPlugin(Plugin):
                                 animation: sxng-fade-in 0.3s ease-out;
                             }}
                         }}
+                        .sxng-ai-header {{
+                            display: flex;
+                            align-items: center;
+                            gap: 0.45rem;
+                            margin-bottom: 0.6rem;
+                            font-weight: 600;
+                            font-size: 0.95rem;
+                            color: var(--color-base-font, inherit);
+                        }}
+                        .sxng-ai-header svg {{
+                            width: 18px;
+                            height: 18px;
+                            fill: var(--color-result-link, #5e81ac);
+                            flex-shrink: 0;
+                        }}
                         #sxng-stream-data .sxng-md-p {{ margin: 0 0 0.5rem; white-space: normal; }}
                         #sxng-stream-data .sxng-md-h {{ font-weight: bold; margin: 0.6rem 0 0.3rem; white-space: normal; }}
                         #sxng-stream-data .sxng-md-list {{ margin: 0.2rem 0 0.5rem 1.4rem; padding: 0; white-space: normal; }}
@@ -1637,6 +1652,10 @@ class SXNGPlugin(Plugin):
                         }}
                         {interactive_css}
                     </style>
+                    <div class="sxng-ai-header">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1c.55 6.05 4.95 10.45 11 11-6.05.55-10.45 4.95-11 11-.55-6.05-4.95-10.45-11-11 6.05-.55 10.45-4.95 11-11z"/></svg>
+                        <span>AI Overview</span>
+                    </div>
                     <div id="sxng-answer-wrap" class="{collapsed_class}">
                         <p id="sxng-stream-data" style="white-space: pre-wrap; color: var(--color-result-description); font-size: 0.95rem; margin:0;"><span class="sxng-cursor"></span></p>
                     </div>
