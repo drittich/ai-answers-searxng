@@ -247,6 +247,71 @@ CITATION_HELPER_JS = r'''
                             }
                             return fragment;
                         }
+
+                        // Inline markdown (bold/italic/code) -> DOM, citations linkified in text runs.
+                        function renderInline(text, urls, parent) {
+                            const re = /\*\*([^*\n]+)\*\*|\*([^*\n]+)\*|`([^`\n]+)`/g;
+                            let last = 0, m;
+                            while ((m = re.exec(text)) !== null) {
+                                if (m.index > last) parent.appendChild(renderCitations(text.substring(last, m.index), urls));
+                                let el;
+                                if (m[1] !== undefined) {
+                                    el = document.createElement('strong');
+                                    el.appendChild(renderCitations(m[1], urls));
+                                } else if (m[2] !== undefined) {
+                                    el = document.createElement('em');
+                                    el.appendChild(renderCitations(m[2], urls));
+                                } else {
+                                    el = document.createElement('code');
+                                    el.textContent = m[3];
+                                }
+                                parent.appendChild(el);
+                                last = m.index + m[0].length;
+                            }
+                            if (last < text.length) parent.appendChild(renderCitations(text.substring(last), urls));
+                        }
+
+                        // Minimal block markdown: headers, ul/ol lists, paragraphs. All text is
+                        // DOM-built (never innerHTML), so model output cannot inject markup.
+                        function renderMarkdown(text, urls) {
+                            const frag = document.createDocumentFragment();
+                            let list = null, listType = null;
+                            const closeList = () => { if (list) { frag.appendChild(list); list = null; listType = null; } };
+                            text.split('\n').forEach(line => {
+                                const t = line.trim();
+                                const h = t.match(/^(#{1,4})\s+(.*)$/);
+                                const ul = t.match(/^[-*+]\s+(.*)$/);
+                                const ol = t.match(/^\d+[.)]\s+(.*)$/);
+                                if (!t) {
+                                    closeList();
+                                } else if (h) {
+                                    closeList();
+                                    const el = document.createElement('div');
+                                    el.className = 'sxng-md-h';
+                                    renderInline(h[2], urls, el);
+                                    frag.appendChild(el);
+                                } else if (ul || ol) {
+                                    const type = ul ? 'ul' : 'ol';
+                                    if (!list || listType !== type) {
+                                        closeList();
+                                        list = document.createElement(type);
+                                        list.className = 'sxng-md-list';
+                                        listType = type;
+                                    }
+                                    const li = document.createElement('li');
+                                    renderInline((ul || ol)[1], urls, li);
+                                    list.appendChild(li);
+                                } else {
+                                    closeList();
+                                    const p = document.createElement('div');
+                                    p.className = 'sxng-md-p';
+                                    renderInline(t, urls, p);
+                                    frag.appendChild(p);
+                                }
+                            });
+                            closeList();
+                            return frag;
+                        }
 '''
 
 INTERACTIVE_JS = r'''
@@ -317,10 +382,6 @@ INTERACTIVE_JS = r'''
                                         ts: 0
                                     }));
                                     
-                                    const injectCitations = (text) => {
-                                        return renderCitations(text, urls);
-                                    };
-                                    
                                     data.innerHTML = '';
                                     conversation.turns.forEach((turn, i) => {
                                         if (turn.role === 'user') {
@@ -334,7 +395,7 @@ INTERACTIVE_JS = r'''
                                                 data.appendChild(clr);
                                             }
                                         } else {
-                                            data.appendChild(injectCitations(turn.content));
+                                            data.appendChild(renderMarkdown(turn.content, urls));
                                         }
                                     });
                                     if(footer && is_interactive) footer.classList.add('sxng-ready');
@@ -346,10 +407,12 @@ INTERACTIVE_JS = r'''
                         document.getElementById('btn-copy').onclick = async (e) => {
                             const btn = e.currentTarget;
                             const originalContent = btn.innerHTML;
-                            const text = Array.from(data.childNodes)
-                                .filter(n => n.nodeType === 3 || n.tagName === 'SPAN')
-                                .map(n => n.textContent)
-                                .join('');
+                            // Copy from conversation state (raw markdown), not the DOM,
+                            // so reasoning boxes and UI text are never included.
+                            const text = conversation.turns
+                                .filter(t => t.role === 'assistant')
+                                .map(t => t.content)
+                                .join('\n\n');
                             await navigator.clipboard.writeText(text);
                             btn.innerHTML = '<svg viewBox="0 0 24 24" style="color:#a3be8c;"><path d="M9 16.17L4.83 12L3.41 13.41L9 19L21 7L19.59 5.59L9 16.17Z"/></svg>';
                             setTimeout(() => btn.innerHTML = originalContent, 2000);
@@ -538,6 +601,13 @@ FRONTEND_JS_TEMPLATE = r"""
                 cursor.className = 'sxng-cursor';
                 data.appendChild(cursor);
             }
+            // Everything streamed this turn lands inside turnWrap (insertions
+            // use cursor.before), so the finished turn can be re-rendered as
+            // markdown without touching earlier turns.
+            const turnWrap = document.createElement('span');
+            turnWrap.className = 'sxng-turn';
+            cursor.before(turnWrap);
+            turnWrap.appendChild(cursor);
 
             let started = false;
             let collectedResponse = '';
@@ -703,20 +773,8 @@ FRONTEND_JS_TEMPLATE = r"""
             }
             
             flushBuffer(true);
-            
-            if (cursor) cursor.remove();
 
-            let last = data.lastChild;
-            while (last) {
-                if (last.textContent && last.textContent.trim().length === 0) {
-                    const prev = last.previousSibling;
-                    last.remove();
-                    last = prev;
-                } else {
-                    if (last.textContent) last.textContent = last.textContent.trimEnd();
-                    break;
-                }
-            }
+            if (cursor) cursor.remove();
 
             if (!started && !collectedResponse.trim()) {
                 const cursor = data.querySelector('.sxng-cursor');
@@ -732,6 +790,17 @@ FRONTEND_JS_TEMPLATE = r"""
                 }
                 data.appendChild(errSpan);
                 return;
+            }
+
+            const finalText = collectedResponse.trim();
+            if (finalText) {
+                // Replace this turn's plain streamed chunks with the markdown
+                // render, keeping the reasoning <details> box if present.
+                Array.from(turnWrap.childNodes).forEach(n => {
+                    const isReasoning = n.nodeType === 1 && n.classList && n.classList.contains('sxng-reasoning');
+                    if (!isReasoning) n.remove();
+                });
+                turnWrap.appendChild(renderMarkdown(finalText, urls));
             }
 
             __INTERACTIVE_JS_COMPLETE__
@@ -1090,7 +1159,7 @@ class SXNGPlugin(Plugin):
                 "MUST CITE SOURCES by tailing a sentence with [n] or [n,n] etc. If citing general knowledge, use [*].",
                 "Do not use filler words, transitions, or meta-commentary.",
                 "Never explain your process. The user expects a direct response.",
-                "Response format must be plain text with no markdown.",
+                "Format with simple markdown only: **bold**, *italic*, `code`, - lists, ## headers. No tables, images, or hyperlinks.",
                 f"High density: Expert-briefing level. Target response length: ~{target_words} words.",
                 "If sources and general knowledge are insufficient, respond with 'Insufficient information to answer.'"
             ]
@@ -1512,6 +1581,17 @@ class SXNGPlugin(Plugin):
                             .sxng-chunk {{
                                 animation: sxng-fade-in 0.3s ease-out;
                             }}
+                        }}
+                        #sxng-stream-data .sxng-md-p {{ margin: 0 0 0.5rem; white-space: normal; }}
+                        #sxng-stream-data .sxng-md-h {{ font-weight: bold; margin: 0.6rem 0 0.3rem; white-space: normal; }}
+                        #sxng-stream-data .sxng-md-list {{ margin: 0.2rem 0 0.5rem 1.4rem; padding: 0; white-space: normal; }}
+                        #sxng-stream-data .sxng-md-list li {{ margin: 0.1rem 0; }}
+                        #sxng-stream-data code {{
+                            font-family: monospace;
+                            font-size: 0.9em;
+                            background: var(--color-base-background-hover, rgba(0,0,0,0.06));
+                            padding: 0 0.25em;
+                            border-radius: 3px;
                         }}
                         #sxng-answer-wrap.sxng-collapsed {{
                             /* fixed height from first paint through completion: zero layout shift */
