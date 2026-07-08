@@ -738,6 +738,8 @@ FRONTEND_JS_TEMPLATE = r"""
             let stableEl = null, liveEl = null;
             let stableLen = 0;
             let renderQueued = false;
+            let lastRenderTime = 0;
+            let renderTimer = null;
 
             const renderTick = () => {
                 renderQueued = false;
@@ -760,11 +762,21 @@ FRONTEND_JS_TEMPLATE = r"""
                 liveEl.appendChild(renderMarkdown(collectedResponse.substring(stableLen), urls));
             };
 
+            // Throttle live re-renders to at most once every 750ms. Streaming
+            // deltas arrive far faster than that, and re-rendering on every
+            // frame makes the display flicker. A trailing timer guarantees the
+            // most recent buffered content renders once the interval elapses;
+            // the final full markdown re-render still runs when the stream ends.
             const scheduleRender = () => {
                 if (renderQueued) return;
                 renderQueued = true;
-                if (window.requestAnimationFrame) requestAnimationFrame(renderTick);
-                else renderTick();
+                const elapsed = Date.now() - lastRenderTime;
+                const delay = Math.max(0, 750 - elapsed);
+                renderTimer = setTimeout(() => {
+                    renderTimer = null;
+                    lastRenderTime = Date.now();
+                    renderTick(); // clears renderQueued
+                }, delay);
             };
 
             let streamBuffer = '';
@@ -864,6 +876,10 @@ FRONTEND_JS_TEMPLATE = r"""
                     }
                 }
             }
+
+            // Stream finished: drop any pending throttled render — the final
+            // full markdown re-render below supersedes it.
+            if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; renderQueued = false; }
 
             if (metaBuf !== null) {
                 try { updateMetricsPanel(JSON.parse(metaBuf)); } catch(e) {}
@@ -1729,6 +1745,10 @@ class SXNGPlugin(Plugin):
                             position: relative;
                             margin: 0;
                             min-height: 1.5em;
+                            font-family: Inter, "Helvetica Neue", Arial, sans-serif;
+                            font-size: 15px;
+                            line-height: 20px;
+                            color: rgb(230, 232, 240);
                         }}
                         .sxng-cursor {{
                             display: inline-block;
@@ -1823,10 +1843,10 @@ class SXNGPlugin(Plugin):
                             <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 .825.178" />
                             <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l2.116-.962" />
                         </svg>
-                        <span>Overview</span>
+                        <span><b>Overview</b></span>
                     </div>
                     <div id="sxng-answer-wrap" class="{collapsed_class}">
-                        <p id="sxng-stream-data" style="white-space: pre-wrap; color: var(--color-result-description); font-size: 0.95rem; margin:0;"><span class="sxng-cursor"></span></p>
+                        <p id="sxng-stream-data" style="white-space: pre-wrap; margin:0;"><span class="sxng-cursor"></span></p>
                     </div>
                     {show_more_html}
                     {interactive_html}
