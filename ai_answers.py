@@ -557,6 +557,28 @@ FRONTEND_JS_TEMPLATE = r"""
     let restored = false;
     let isStreaming = false;
 
+    // The AI panel is injected as a SearXNG answer, so native answers (e.g.
+    // the Wikipedia summary) render as siblings and duplicate the overview.
+    // Hide them while the panel is live; restore if the AI answer fails.
+    const hiddenAnswers = [];
+    function hideNativeAnswers() {
+        const container = box.closest('#answers') || box.parentElement;
+        if (!container) return;
+        Array.from(container.children).forEach(el => {
+            if (el === box || el.contains(box)) return;
+            hiddenAnswers.push([el, el.style.display]);
+            el.style.display = 'none';
+        });
+    }
+    function restoreNativeAnswers() {
+        if (conversation.turns.some(t => t.role === 'assistant')) return;
+        while (hiddenAnswers.length) {
+            const [el, d] = hiddenAnswers.pop();
+            el.style.display = d;
+        }
+    }
+    hideNativeAnswers();
+
     function expandAnswer() {
         if (answerWrap) answerWrap.classList.remove('sxng-collapsed');
         if (showMoreWrap) showMoreWrap.classList.remove('sxng-visible');
@@ -683,6 +705,7 @@ FRONTEND_JS_TEMPLATE = r"""
                 errSpan.style.color = '#bf616a';
                 errSpan.textContent = "Error: " + res.statusText;
                 data.appendChild(errSpan);
+                restoreNativeAnswers();
                 return;
             }
 
@@ -861,6 +884,7 @@ FRONTEND_JS_TEMPLATE = r"""
                     errSpan.textContent = 'No response received. Check API configuration and server logs.';
                 }
                 data.appendChild(errSpan);
+                restoreNativeAnswers();
                 return;
             }
 
@@ -902,6 +926,7 @@ FRONTEND_JS_TEMPLATE = r"""
                 if (cursor) cursor.remove();
                 data.appendChild(errSpan);
             }
+            restoreNativeAnswers();
         } finally {
             isStreaming = false;
             box.classList.remove('sxng-streaming');

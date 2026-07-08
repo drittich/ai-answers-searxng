@@ -437,6 +437,15 @@ def test_post_search_injects_answer(make_plugin):
     assert 'sxng-collapsed' in html
 
 
+def test_post_search_hides_native_answers(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    search = MockSearch()
+    p.post_search(None, search)
+    html = list(search.result_container.answers)[0]
+    assert 'hideNativeAnswers();' in html
+    assert 'function restoreNativeAnswers()' in html
+
+
 def test_post_search_respects_collapsed_off(make_plugin):
     p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_COLLAPSED='false')
     search = MockSearch()
