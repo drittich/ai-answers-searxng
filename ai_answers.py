@@ -1774,8 +1774,8 @@ class SXNGPlugin(Plugin):
                             gap: 0.45rem;
                             margin-bottom: 0.6rem;
                             font-weight: 600;
-                            font-size: 0.95rem;
-                            color: var(--color-base-font, inherit);
+                            font-size: 16px;
+                            color: white;
                         }}
                         .sxng-ai-header svg {{
                             width: 18px;
@@ -1843,7 +1843,7 @@ class SXNGPlugin(Plugin):
                             <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 .825.178" />
                             <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l2.116-.962" />
                         </svg>
-                        <span style="color:white">Overview</span>
+                        <span>Overview</span>
                     </div>
                     <div id="sxng-answer-wrap" class="{collapsed_class}">
                         <p id="sxng-stream-data" style="white-space: pre-wrap; margin:0;"><span class="sxng-cursor"></span></p>
