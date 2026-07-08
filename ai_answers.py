@@ -569,6 +569,7 @@ FRONTEND_JS_TEMPLATE = r"""
         }
         
         isStreaming = true;
+        box.classList.add('sxng-streaming');
         try {
             const ctx = auxContext || conversation.originalContext;
 
@@ -832,6 +833,7 @@ FRONTEND_JS_TEMPLATE = r"""
             }
         } finally {
             isStreaming = false;
+            box.classList.remove('sxng-streaming');
             updateShowMore();
         }
     }
@@ -1607,6 +1609,14 @@ class SXNGPlugin(Plugin):
                             height: 18px;
                             fill: var(--color-result-link, #5e81ac);
                             flex-shrink: 0;
+                            transform-origin: center;
+                        }}
+                        @keyframes sxng-sparkle-pulse {{
+                            0%, 100% {{ opacity: 1; transform: scale(1); }}
+                            50% {{ opacity: 0.45; transform: scale(0.88); }}
+                        }}
+                        #sxng-stream-box.sxng-streaming .sxng-ai-header svg {{
+                            animation: sxng-sparkle-pulse 1.6s ease-in-out infinite;
                         }}
                         #sxng-stream-data .sxng-md-p {{ margin: 0 0 0.5rem; white-space: normal; }}
                         #sxng-stream-data .sxng-md-h {{ font-weight: bold; margin: 0.6rem 0 0.3rem; white-space: normal; }}
