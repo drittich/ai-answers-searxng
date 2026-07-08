@@ -1605,7 +1605,7 @@ class SXNGPlugin(Plugin):
                         .sxng-ai-header svg {{
                             width: 18px;
                             height: 18px;
-                            fill: var(--color-result-link, #5e81ac);
+                            stroke: var(--color-result-link, #5e81ac);
                             flex-shrink: 0;
                             transform-origin: center;
                         }}
@@ -1661,8 +1661,14 @@ class SXNGPlugin(Plugin):
                         {interactive_css}
                     </style>
                     <div class="sxng-ai-header">
-                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1c.55 6.05 4.95 10.45 11 11-6.05.55-10.45 4.95-11 11-.55-6.05-4.95-10.45-11-11 6.05-.55 10.45-4.95 11-11z"/></svg>
-                        <span>AI Overview</span>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 .83.18 2 2 0 0 0 .83-.18l8.58-3.9a1 1 0 0 0 0-1.831z" />
+                            <path d="M16 17h6" />
+                            <path d="M19 14v6" />
+                            <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 .825.178" />
+                            <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l2.116-.962" />
+                        </svg>
+                        <span>Overview</span>
                     </div>
                     <div id="sxng-answer-wrap" class="{collapsed_class}">
                         <p id="sxng-stream-data" style="white-space: pre-wrap; color: var(--color-result-description); font-size: 0.95rem; margin:0;"><span class="sxng-cursor"></span></p>
