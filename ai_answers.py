@@ -771,7 +771,12 @@ FRONTEND_JS_TEMPLATE = r"""
                 if (renderQueued) return;
                 renderQueued = true;
                 const elapsed = Date.now() - lastRenderTime;
-                const delay = Math.max(0, 750 - elapsed);
+                // First paint: wait a short warm-up so a phrase accumulates
+                // instead of flashing a lone first letter. Afterwards, throttle
+                // at 750ms.
+                const delay = lastRenderTime === 0
+                    ? 300
+                    : Math.max(0, 750 - elapsed);
                 renderTimer = setTimeout(() => {
                     renderTimer = null;
                     lastRenderTime = Date.now();
