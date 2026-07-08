@@ -600,6 +600,24 @@ FRONTEND_JS_TEMPLATE = r"""
             details.appendChild(table);
             panel.appendChild(details);
             const anchor = document.getElementById('engines_msg');
+            // Native panels get separators/spacing from ID-specific theme CSS
+            // (#engines_msg, #apis); copy the neighbour's computed box styles
+            // so this panel matches on any theme.
+            try {
+                if (anchor && window.getComputedStyle) {
+                    const boxProps = ['borderTop', 'borderBottom', 'paddingTop', 'paddingBottom', 'marginTop', 'marginBottom'];
+                    const copyProps = (src, dst, props) => {
+                        const s = getComputedStyle(src);
+                        props.forEach(p => { dst.style[p] = s[p]; });
+                    };
+                    copyProps(anchor, panel, boxProps);
+                    const srcDetails = anchor.querySelector('details');
+                    if (srcDetails) copyProps(srcDetails, details, boxProps);
+                    const srcSummary = anchor.querySelector('summary');
+                    if (srcSummary) copyProps(srcSummary, details.querySelector('summary'),
+                        boxProps.concat(['fontWeight', 'fontSize', 'fontFamily', 'color', 'opacity']));
+                }
+            } catch(e) {}
             if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(panel, anchor.nextSibling);
             else sidebar.appendChild(panel);
         }
