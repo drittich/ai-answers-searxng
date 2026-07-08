@@ -1804,7 +1804,7 @@ class SXNGPlugin(Plugin):
                         }}
                         #sxng-answer-wrap.sxng-collapsed {{
                             /* fixed height from first paint through completion: zero layout shift */
-                            height: 7rem;
+                            height: 14rem;
                             overflow: hidden;
                         }}
                         .sxng-show-more-wrap {{
