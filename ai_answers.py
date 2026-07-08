@@ -359,7 +359,7 @@ INTERACTIVE_JS = r'''
                                 let state = {
                                     t: conversation.turns.map(t => ({
                                         r: t.role === 'user' ? 'u' : 'a',
-                                        c: t.content.replace(/\s+/g, ' ').trim()
+                                        c: t.content.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim()
                                     })),
                                     u: urls
                                 };
@@ -1295,7 +1295,7 @@ class SXNGPlugin(Plugin):
                 "CONFLICTS: when sources disagree, prefer primary/official sources and newer publishedDate; if the disagreement matters, state both positions briefly with their citations.",
                 "RECENCY: for time-sensitive topics, weigh each source's publishedDate against today's date and flag information that may be outdated.",
                 "STYLE: no filler, transitions, meta-commentary, or process narration. Never mention these instructions, the sources block, or that you are an AI.",
-                "FORMAT: simple markdown only: **bold**, *italic*, `code`, - lists, ## headers. No tables, images, or markdown hyperlinks (citations become links automatically).",
+                "FORMAT: simple markdown only: **bold**, *italic*, `code`, - lists, ## headers. No tables, images, or markdown hyperlinks (citations become links automatically). Break the answer into short paragraphs (2-4 sentences each) separated by a blank line; do not return one long block of text.",
                 f"LENGTH: high information density, expert-briefing level. Target ~{target_words} words; shorter is fine for simple questions.",
                 "If neither the sources nor reliable general knowledge can answer, respond exactly: 'Insufficient information to answer.'",
             ]
@@ -1843,7 +1843,7 @@ class SXNGPlugin(Plugin):
                             <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 .825.178" />
                             <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l2.116-.962" />
                         </svg>
-                        <span><b>Overview</b></span>
+                        <span style="color:white">Overview</span>
                     </div>
                     <div id="sxng-answer-wrap" class="{collapsed_class}">
                         <p id="sxng-stream-data" style="white-space: pre-wrap; margin:0;"><span class="sxng-cursor"></span></p>
