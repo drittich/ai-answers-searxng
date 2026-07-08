@@ -592,7 +592,7 @@ FRONTEND_JS_TEMPLATE = r"""
             details.className = 'sidebar-collapsable';
             const summary = document.createElement('summary');
             summary.className = 'title';
-            summary.textContent = 'AI metrics';
+            summary.textContent = 'AI overview metrics';
             details.appendChild(summary);
             table = document.createElement('table');
             table.id = 'sxng-ai-metrics-table';
