@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import json
 import time
 
@@ -159,6 +160,13 @@ def _make_app(plugin):
 
 def _token(plugin, ts=None):
     ts = str(int(ts if ts is not None else time.time()))
+    sig = hmac.new(plugin.secret.encode(), ts.encode(), hashlib.sha256).hexdigest()
+    return f"{ts}.{sig}"
+
+
+def _legacy_token(plugin, ts=None):
+    """Pre-HMAC token format: sha256(ts + secret). Must be rejected."""
+    ts = str(int(ts if ts is not None else time.time()))
     sig = hashlib.sha256(f"{ts}{plugin.secret}".encode()).hexdigest()
     return f"{ts}.{sig}"
 
@@ -166,9 +174,18 @@ def _token(plugin, ts=None):
 def test_stream_rejects_bad_tokens(make_plugin):
     p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
     client = _make_app(p)
-    for tk in ["", "garbage", "123.deadbeef", _token(p) + "x"]:
+    for tk in ["", "garbage", "123.deadbeef", _token(p) + "x", _legacy_token(p)]:
         rv = client.post('/ai-stream', json={"q": "test", "tk": tk})
         assert rv.status_code == 403, f"token {tk!r} should be rejected"
+
+
+def test_token_roundtrip_hmac(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    ts = str(int(time.time()))
+    assert p._verify_token(p._make_token(ts)) is True
+    assert p._verify_token(_legacy_token(p)) is False
+    assert p._verify_token(None) is False
+    assert p._verify_token(12345) is False
 
 
 def test_stream_rejects_expired_token(make_plugin):
@@ -190,6 +207,24 @@ def test_aux_search_rejects_bad_token(make_plugin):
     client = _make_app(p)
     rv = client.post('/ai-auxiliary-search', json={"query": "test", "tk": "garbage"})
     assert rv.status_code == 403
+
+
+def test_aux_search_bad_offset_does_not_crash(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    client = _make_app(p)
+    # empty query short-circuits after input parsing; a non-numeric offset
+    # must not raise in the clamping code
+    rv = client.post('/ai-auxiliary-search', json={"query": "", "offset": "abc", "tk": _token(p)})
+    assert rv.status_code == 200
+    assert rv.get_json() == {"results": []}
+
+
+def test_weak_secret_warning(make_plugin, monkeypatch, caplog):
+    import ai_answers
+    monkeypatch.setitem(ai_answers.settings['server'], 'secret_key', 'ultrasecretkey')
+    with caplog.at_level('WARNING'):
+        make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    assert any('secret_key' in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------- streaming parser
@@ -267,11 +302,27 @@ def test_stream_reasoning_only_still_closes_think_tag(make_plugin, monkeypatch):
     assert out.count("<think>") == 1 and out.count("</think>") == 1
 
 
-def test_stream_upstream_error_object_surfaced(make_plugin, monkeypatch):
+def test_stream_upstream_error_is_generic(make_plugin, monkeypatch):
     p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
-    lines = [_sse({"error": {"message": "rate limited"}})]
+    lines = [_sse({"error": {"message": "rate limited (key sk-secret)"}})]
     _, out = _stream_with(monkeypatch, p, lines)
-    assert "rate limited" in out
+    assert "sk-secret" not in out
+    assert "Upstream API error" in out
+
+
+def test_connection_error_is_generic(make_plugin, monkeypatch):
+    import ai_answers
+
+    def boom(url):
+        raise RuntimeError("secret-detail http://internal-host:8080")
+
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    monkeypatch.setattr(ai_answers, "_get_streaming_connection", boom)
+    client = _make_app(p)
+    rv = client.post('/ai-stream', json={"q": "test", "tk": _token(p)})
+    out = rv.get_data(as_text=True)
+    assert "secret-detail" not in out and "internal-host" not in out
+    assert "Connection error" in out
 
 
 def test_stream_non_200_surfaced(make_plugin, monkeypatch):
@@ -301,6 +352,50 @@ def test_request_payload_shape(make_plugin, monkeypatch):
     nums = [int(m) for m in __import__('re').findall(r'^(\d+)\.', directives, __import__('re').M)]
     assert nums == list(range(1, len(nums) + 1)) and len(nums) >= 7
     assert conn.requests[0]["headers"]["Authorization"] == "Bearer k"
+
+
+def test_default_prompt_anti_injection_and_recency(make_plugin, monkeypatch):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    conn, _ = _stream_with(monkeypatch, p, ["data: [DONE]\n"])
+    system = json.loads(conn.requests[0]["body"])["messages"][0]["content"]
+    assert "untrusted" in system
+    assert "publishedDate" in system
+    assert "Valid citation indices" in system
+    assert "[*]" in system
+    assert "Insufficient information to answer." in system
+
+
+def test_stream_caps_context_and_q(make_plugin, monkeypatch):
+    import ai_answers
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    conn = FakeConn(FakeHTTPResponse(200, ["data: [DONE]\n"]))
+    monkeypatch.setattr(ai_answers, "_get_streaming_connection", lambda url: (conn, "/v1/chat/completions"))
+    client = _make_app(p)
+    rv = client.post('/ai-stream', json={"q": "q" * 10000, "context": "[1] " + "c" * 100000,
+                                         "tk": _token(p)})
+    rv.get_data()  # consume the streamed response so the request is issued
+    user_msg = json.loads(conn.requests[0]["body"])["messages"][1]["content"]
+    assert "q" * (ai_answers.MAX_QUERY_LEN + 1) not in user_msg
+    assert "q" * ai_answers.MAX_QUERY_LEN in user_msg
+    assert "c" * (ai_answers.MAX_CONTEXT_LEN + 1) not in user_msg
+
+
+def test_gemini_key_in_header_not_url(make_plugin, monkeypatch):
+    import ai_answers
+    p = make_plugin(LLM_PROVIDER='gemini', LLM_KEY='AIza-test')
+    seen_urls = []
+    conn = FakeConn(FakeHTTPResponse(200, []))
+
+    def fake_connect(url):
+        seen_urls.append(url)
+        return conn, "/v1beta/models/x:streamGenerateContent"
+
+    monkeypatch.setattr(ai_answers, "_get_streaming_connection", fake_connect)
+    client = _make_app(p)
+    rv = client.post('/ai-stream', json={"q": "test", "tk": _token(p)})
+    rv.get_data()  # consume the streamed response so the request is issued
+    assert seen_urls and all('key=' not in u for u in seen_urls)
+    assert conn.requests[0]["headers"]["x-goog-api-key"] == 'AIza-test'
 
 
 # ---------------------------------------------------------------- post_search injection
@@ -360,6 +455,28 @@ def test_post_search_gating(make_plugin, kw):
     search = MockSearch(**kw)
     p.post_search(None, search)
     assert len(search.result_container.answers) == 0
+
+
+def test_url_state_toggle(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    search = MockSearch()
+    p.post_search(None, search)
+    assert 'const url_state = true' in list(search.result_container.answers)[0]
+
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_URL_STATE='false')
+    search = MockSearch()
+    p.post_search(None, search)
+    assert 'const url_state = false' in list(search.result_container.answers)[0]
+
+
+def test_citation_url_allowlist_present(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    search = MockSearch()
+    p.post_search(None, search)
+    html = list(search.result_container.answers)[0]
+    assert 'safeCitationUrl' in html
+    assert 'state.u.map(safeCitationUrl)' in html
+    assert 'new_urls.map(safeCitationUrl)' in html
 
 
 def test_post_search_question_mark_gate(make_plugin):

@@ -17,6 +17,7 @@ interactive_js = extract("INTERACTIVE_JS")
 replacements = {
     "__IS_INTERACTIVE__": "true",
     "__IS_COLLAPSED__": "true",
+    "__URL_STATE__": "true",
     "__JS_Q__": "\"dummy_query\"",
     "__JS_LANG__": "\"en\"",
     "__JS_URLS__": "[]",

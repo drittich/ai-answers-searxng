@@ -126,7 +126,7 @@ Configure via the environment variables:
 
 - `LLM_MODEL`: Model identifier. Defaults vary. Recommended: 10-30B dense or 5-15B MoE activated.
 - `LLM_URL`: Overrides endpoint URL for any provider preset. Include the scheme — local providers usually need an explicit `http://`.
-- `LLM_SYSTEM_PROMPT`: Overrides the persona line of the system prompt. Default `You are a direct, citation-accurate search synthesis engine.`.
+- `LLM_SYSTEM_PROMPT`: Overrides the persona line of the system prompt. Default `You are a precise search-answer engine that synthesizes the provided web sources into a direct, citation-accurate answer.`.
 - `LLM_MAX_TOKENS`: Answer token budget. Default `500`.
 - `LLM_REASONING_MAX_TOKENS`: Extra token headroom for thinking/reasoning models, added on top of `LLM_MAX_TOKENS` in the API request. Without it, a reasoning model can spend the whole budget thinking and never produce the answer. Default `0`. Suggested `1000`–`4000` for models like DeepSeek V4 Flash in thinking mode.
 - `LLM_EXTRA_BODY`: JSON object merged into the chat-completions request body — use for provider-specific parameters, e.g. `{"reasoning_effort": "high"}` (DeepSeek thinking effort) or `{"provider": {"order": ["..."]}}` (OpenRouter routing). Default unset.
@@ -138,6 +138,7 @@ Configure via the environment variables:
 - `LLM_COLLAPSED`: Show the answer as a fixed-height preview with a "Show more" button (no layout shift while streaming). Set to `false` for the always-expanded behavior. Default `true`.
 - `LLM_QUESTION_MARK_REQUIRED`: Only trigger AI answers when the query contains `?`. Default `false`.
 - `LLM_OLLAMA_UNLOAD_AFTER`: Unload Ollama model after each response. Default `false`.
+- `LLM_URL_STATE`: Save/restore the conversation in the URL `#ai=` fragment so answers survive reloads and links are shareable. Set to `false` to keep conversations out of URLs and browser history. Default `true`.
 
 ## How It Works
 1. user initial search
@@ -146,7 +147,16 @@ Configure via the environment variables:
 4. token optimized context extracted
 5. inject the ui/logic "shell" into standard results answer object
 6. client side script calls custom endpoint with signed token
-7. LLM response streams back token by token; thinking (`reasoning_content` or `<think>` tags) renders into a collapsible box, and the finished answer is re-rendered as markdown with linked citations
+7. LLM response streams back token by token; thinking (`reasoning_content` or `<think>` tags) renders into a collapsible box, and the answer renders as markdown with linked citations live while it streams (completed blocks render once; only the trailing partial block re-renders per frame)
+
+## Security notes
+
+- **Set a strong `server.secret_key`** in SearXNG's `settings.yml`. The plugin signs its streaming tokens with a key derived from it and logs a warning if it is empty or the SearXNG default (`ultrasecretkey`) — with a weak secret, tokens are forgeable.
+- **Streaming tokens** are HMAC-SHA256 signed, expire after 1 hour, and are verified with constant-time comparison. They are deliberately not bound to a specific query (follow-up questions legitimately send new queries), so a visitor holding a token can call the stream endpoint with arbitrary input for up to an hour. Input caps bound the cost per request (2,000-char query, 24,000-char context, 4,000-char history); use SearXNG's built-in limiter or your reverse proxy for request-rate control.
+- **Upgrading from an older version:** tokens minted before the HMAC switch are rejected — users with a stale results page open just need to run a new search.
+- **Citation links** are restricted to `http`/`https` URLs on the client; anything else (e.g. `javascript:` smuggled through the `#ai=` state fragment) renders as plain text.
+- **TLS verification** for LLM connections follows SearXNG's outgoing network settings; disabling it logs a prominent warning.
+- **API keys** are only sent in request headers (Gemini uses `x-goog-api-key`), never in URLs, and upstream/connection error details go to the server log rather than the browser.
 
 ## Examples
 
