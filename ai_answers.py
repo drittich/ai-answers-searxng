@@ -549,6 +549,7 @@ FRONTEND_JS_TEMPLATE = r"""
     };
     const is_collapsed = __IS_COLLAPSED__;
     const url_state = __URL_STATE__;
+    const show_metrics = __SHOW_METRICS__;
     const box = document.getElementById('sxng-stream-box');
     const data = document.getElementById('sxng-stream-data');
     const answerWrap = document.getElementById('sxng-answer-wrap');
@@ -576,6 +577,58 @@ FRONTEND_JS_TEMPLATE = r"""
     __CITATION_HELPER_JS__
 
     __INTERACTIVE_JS_INIT__
+
+    // Sidebar accordion mirroring SearXNG's "Response time" panel. All values
+    // are DOM-built textContent; "~" marks char/4 estimates.
+    function updateMetricsPanel(meta) {
+        if (!show_metrics || !meta) return;
+        const sidebar = document.getElementById('sidebar');
+        if (!sidebar) return;
+        let table = document.getElementById('sxng-ai-metrics-table');
+        if (!table) {
+            const panel = document.createElement('div');
+            panel.id = 'sxng-ai-metrics';
+            const details = document.createElement('details');
+            details.className = 'sidebar-collapsable';
+            const summary = document.createElement('summary');
+            summary.className = 'title';
+            summary.textContent = 'AI metrics';
+            details.appendChild(summary);
+            table = document.createElement('table');
+            table.id = 'sxng-ai-metrics-table';
+            table.style.cssText = 'width:100%;font-size:0.9em;border-collapse:collapse;';
+            details.appendChild(table);
+            panel.appendChild(details);
+            const anchor = document.getElementById('engines_msg');
+            if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(panel, anchor.nextSibling);
+            else sidebar.appendChild(panel);
+        }
+        const fmtTok = (v, est) => v == null ? '—' : (est ? '~' : '') + v.toLocaleString();
+        const fmtSec = (ms) => ms == null ? '—' : (ms / 1000).toFixed(1) + ' s';
+        const rows = [
+            ['Model', meta.model || '—'],
+            ['Tokens sent', fmtTok(meta.pt, meta.ept)],
+            ['Tokens received', fmtTok(meta.ct, meta.ect)],
+            ['First token', fmtSec(meta.ttft)],
+            ['Response time', fmtSec(meta.dur)]
+        ];
+        if (meta.ct && meta.dur > meta.ttft) {
+            rows.push(['Speed', (meta.ect ? '~' : '') + Math.round(meta.ct / ((meta.dur - meta.ttft) / 1000)) + ' tok/s']);
+        }
+        table.textContent = '';
+        rows.forEach(([k, v]) => {
+            const tr = document.createElement('tr');
+            const tk = document.createElement('td');
+            tk.textContent = k;
+            tk.style.cssText = 'padding:0.15rem 0.5rem 0.15rem 0;opacity:0.7;white-space:nowrap;vertical-align:top;';
+            const tv = document.createElement('td');
+            tv.textContent = v;
+            tv.style.cssText = 'padding:0.15rem 0;text-align:right;word-break:break-all;';
+            tr.appendChild(tk);
+            tr.appendChild(tv);
+            table.appendChild(tr);
+        });
+    }
 
     function synthesizeQuery(original, followup) {
         const cleanOrig = original.replace(/^(what|how|why|when|where|who|which|is|are|can|does|do)(\s+(is|are|do|does|can|to|a|an|the))?\s+/i, '');
@@ -674,6 +727,7 @@ FRONTEND_JS_TEMPLATE = r"""
             };
 
             let streamBuffer = '';
+            let metaBuf = null;
             while (true) {
                 const {done, value} = await reader.read();
                 if (done) break;
@@ -681,7 +735,13 @@ FRONTEND_JS_TEMPLATE = r"""
                 clearTimeout(timeoutId);
                 timeoutId = setTimeout(() => controller.abort(), 60000);
 
-                const chunk = decoder.decode(value, {stream: true});
+                let chunk = decoder.decode(value, {stream: true});
+                if (metaBuf !== null) { metaBuf += chunk; continue; }
+                const rsIdx = chunk.indexOf('\x1e');
+                if (rsIdx !== -1) {
+                    metaBuf = chunk.substring(rsIdx + 1);
+                    chunk = chunk.substring(0, rsIdx);
+                }
                 if (!chunk) continue;
                 
                 streamBuffer += chunk;
@@ -762,6 +822,10 @@ FRONTEND_JS_TEMPLATE = r"""
                         collectedResponse += streamBuffer;
                     }
                 }
+            }
+
+            if (metaBuf !== null) {
+                try { updateMetricsPanel(JSON.parse(metaBuf)); } catch(e) {}
             }
 
             if (cursor) cursor.remove();
@@ -888,6 +952,7 @@ class SXNGPlugin(Plugin):
     def _load_config(self):
         self.interactive = os.getenv('LLM_INTERACTIVE', 'true').lower().strip() in ('true', '1', 'yes', 'on')
         self.collapsed = os.getenv('LLM_COLLAPSED', 'true').lower().strip() in ('true', '1', 'yes', 'on')
+        self.show_metrics = os.getenv('LLM_SHOW_METRICS', 'true').lower().strip() in ('true', '1', 'yes', 'on')
         self.question_mark_required = os.getenv('LLM_QUESTION_MARK_REQUIRED', 'false').lower().strip() in ('true', '1', 'yes', 'on')
         raw_provider = os.getenv('LLM_PROVIDER', '').lower().strip()
         
@@ -1209,7 +1274,7 @@ class SXNGPlugin(Plugin):
 
 <USER_QUERY>{q}</USER_QUERY>"""
 
-            def stream_gemini():
+            def stream_gemini(meta):
                 conn = None
                 try:
                     conn, path = _get_streaming_connection(self.endpoint_url)
@@ -1253,7 +1318,16 @@ class SXNGPlugin(Plugin):
                                 for item in items:
                                     if not isinstance(item, dict):
                                         continue
-                                    
+
+                                    um = item.get('usageMetadata')
+                                    if isinstance(um, dict):
+                                        if isinstance(um.get('promptTokenCount'), int):
+                                            meta['pt'] = um['promptTokenCount']
+                                        if isinstance(um.get('candidatesTokenCount'), int):
+                                            meta['ct'] = um['candidatesTokenCount']
+                                    if isinstance(item.get('modelVersion'), str) and item['modelVersion']:
+                                        meta['model'] = item['modelVersion']
+
                                     if 'promptFeedback' in item and item['promptFeedback'].get('blockReason'):
                                         yield f"\n⚠️ Gemini blocked prompt. Reason: {item['promptFeedback']['blockReason']}\n"
                                         return
@@ -1296,7 +1370,7 @@ class SXNGPlugin(Plugin):
                 finally:
                     if conn: conn.close()
 
-            def stream_openai_compatible():
+            def stream_openai_compatible(meta):
                 conn = None
                 try:
                     conn, path = _get_streaming_connection(self.endpoint_url)
@@ -1310,6 +1384,10 @@ class SXNGPlugin(Plugin):
                         "max_tokens": self.max_tokens + self.reasoning_max_tokens,
                         "temperature": self.temperature
                     }
+                    if self.provider in ('openai', 'openrouter'):
+                        # Ask for a final usage chunk; other providers may reject
+                        # the param, so only send it where support is known.
+                        body["stream_options"] = {"include_usage": True}
                     body.update(self.extra_body)
                     payload = json.dumps(body)
                     headers = {
@@ -1359,7 +1437,20 @@ class SXNGPlugin(Plugin):
                                     logger.error(f"{PLUGIN_NAME}: {self.provider} upstream error: {err_msg}")
                                     yield "\n⚠️ Upstream API error. Check server logs.\n"
                                     return
-                                    
+
+                                # Metrics: routers (e.g. OpenRouter) report the model
+                                # actually used; usage arrives in a final chunk that
+                                # typically has no choices, so read both before the
+                                # choices check below.
+                                if isinstance(obj.get("model"), str) and obj["model"]:
+                                    meta['model'] = obj["model"]
+                                usage = obj.get("usage")
+                                if isinstance(usage, dict):
+                                    if isinstance(usage.get("prompt_tokens"), int):
+                                        meta['pt'] = usage["prompt_tokens"]
+                                    if isinstance(usage.get("completion_tokens"), int):
+                                        meta['ct'] = usage["completion_tokens"]
+
                                 choices = obj.get("choices")
                                 if not isinstance(choices, list) or len(choices) == 0:
                                     continue
@@ -1400,20 +1491,40 @@ class SXNGPlugin(Plugin):
                 finally:
                     if conn: conn.close()
 
-            generator = stream_gemini if self.is_gemini else stream_openai_compatible
+            base_gen = stream_gemini if self.is_gemini else stream_openai_compatible
 
-            if self.provider == 'ollama' and getattr(self, 'ollama_unload_after', False):
-
-                gen_fn = generator
-
-                def generator():
-
-                    try:
-
-                        yield from gen_fn()
-
-                    finally:
-
+            def generator():
+                meta = {}
+                start = time.monotonic()
+                first_tok = None
+                chars = 0
+                try:
+                    for chunk in base_gen(meta):
+                        if first_tok is None:
+                            first_tok = time.monotonic()
+                        chars += len(chunk)
+                        yield chunk
+                    if self.show_metrics:
+                        end = time.monotonic()
+                        payload = {
+                            'model': meta.get('model') or self.model,
+                            'pt': meta.get('pt'), 'ept': False,
+                            'ct': meta.get('ct'), 'ect': False,
+                            'ttft': int(((first_tok or end) - start) * 1000),
+                            'dur': int((end - start) * 1000),
+                        }
+                        # ~4 chars/token estimate when the provider omits usage
+                        if payload['pt'] is None:
+                            payload['pt'] = max(1, (len(system_message) + len(user_message)) // 4)
+                            payload['ept'] = True
+                        if payload['ct'] is None:
+                            payload['ct'] = chars // 4
+                            payload['ect'] = True
+                        # \x1e separates answer text from the metrics trailer;
+                        # the frontend strips it before rendering.
+                        yield '\x1e' + json.dumps(payload)
+                finally:
+                    if self.provider == 'ollama' and getattr(self, 'ollama_unload_after', False):
                         self._ollama_unload_model()
             return Response(generator(), mimetype='text/event-stream', headers={
                 'X-Accel-Buffering': 'no',
@@ -1541,6 +1652,7 @@ class SXNGPlugin(Plugin):
                 .replace("__IS_INTERACTIVE__", 'true' if is_interactive else 'false') \
                 .replace("__IS_COLLAPSED__", 'true' if self.collapsed else 'false') \
                 .replace("__URL_STATE__", 'true' if self.url_state else 'false') \
+                .replace("__SHOW_METRICS__", 'true' if self.show_metrics else 'false') \
                 .replace("__TK__", js_tk) \
                 .replace("__SCRIPT_ROOT__", js_script_root) \
                 .replace("__CITATION_HELPER_JS__", CITATION_HELPER_JS) \
