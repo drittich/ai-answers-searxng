@@ -557,6 +557,14 @@ FRONTEND_JS_TEMPLATE = r"""
     let restored = false;
     let isStreaming = false;
 
+    // Set the instant a navigation is committed (e.g. switching result tabs),
+    // before the browser tears down the in-flight fetch. Lets the stream's
+    // catch block distinguish a benign navigation from a real failure.
+    let pageIsUnloading = false;
+    const _markUnloading = () => { pageIsUnloading = true; };
+    window.addEventListener('pagehide', _markUnloading);
+    window.addEventListener('beforeunload', _markUnloading);
+
     // The AI panel is injected as a SearXNG answer, so native answers (e.g.
     // the Wikipedia summary) render as siblings and duplicate the overview.
     // Hide them while the panel is live; restore if the AI answer fails.
@@ -932,6 +940,13 @@ FRONTEND_JS_TEMPLATE = r"""
             }
 
         } catch (e) {
+            // A tab switch / navigation cancels the in-flight fetch, which
+            // rejects as a network TypeError (not an AbortError). That is
+            // benign, not a real failure — don't flash a scary error while the
+            // page unloads or after the widget has been detached from the DOM.
+            if (pageIsUnloading || !box || !box.isConnected || !data || !data.isConnected) {
+                return; // finally still runs cleanup
+            }
             console.error('[AI Answers] Fatal stream exception:', e);
             const errSpan = document.createElement('span');
             errSpan.style.cssText = 'color: #bf616a; font-weight: bold; display: block; margin-top: 0.5rem;';
@@ -1842,13 +1857,14 @@ class SXNGPlugin(Plugin):
                     </style>
                     <div class="sxng-ai-header">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                            <path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 .83.18 2 2 0 0 0 .83-.18l8.58-3.9a1 1 0 0 0 0-1.831z" />
-                            <path d="M16 17h6" />
-                            <path d="M19 14v6" />
-                            <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 .825.178" />
-                            <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l2.116-.962" />
+                            <path d="M12 6V2H8" />
+                            <path d="m8 18-4 4V8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2Z" />
+                            <path d="M2 12h2" />
+                            <path d="M9 11v2" />
+                            <path d="M15 11v2" />
+                            <path d="M20 12h2" />
                         </svg>
-                        <span>Overview</span>
+                        <span>AI Summary</span>
                     </div>
                     <div id="sxng-answer-wrap" class="{collapsed_class}">
                         <p id="sxng-stream-data" style="white-space: pre-wrap; margin:0;"><span class="sxng-cursor"></span></p>
