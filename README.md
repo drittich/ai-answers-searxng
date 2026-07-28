@@ -9,7 +9,7 @@ A SearXNG plugin that generates AI answers using search results as RAG context. 
 Features:
 - token-by-token UI streaming
 - markdown rendering (bold, italics, code, lists, headers) with clickable inline citations
-- collapsed preview with "Show more" — the results list never shifts while the answer streams
+- collapsed preview with a "Show more" / "Show less" toggle and a fade-out edge — the results list never shifts while the answer streams
 - reasoning-model support: streamed thinking shown in a collapsible "Thought Process" box, with a separate reasoning token budget
 - interactive mode to continue summary, ask follow ups, copy, or regenerate
 - simple response mode with no extras
@@ -135,7 +135,7 @@ Configure via the environment variables:
 - `LLM_CONTEXT_SHALLOW_COUNT`: Results with headlines only (additional breadth). Default `15`.
 - `LLM_TABS`: Tab whitelist, comma delimiter. Default `general,science,it,news`.
 - `LLM_INTERACTIVE`: UI mode. Default is `true` (interactive: copy, regenerate, follow up). Set to `false` for simple response only mode.
-- `LLM_COLLAPSED`: Show the answer as a fixed-height preview with a "Show more" button (no layout shift while streaming). Set to `false` for the always-expanded behavior. Default `true`.
+- `LLM_COLLAPSED`: Show the answer as a fixed-height preview with a "Show more" / "Show less" toggle (no layout shift while streaming). Set to `false` for the always-expanded behavior. Default `true`.
 - `LLM_QUESTION_MARK_REQUIRED`: Only trigger AI answers when the query contains `?`. Default `false`.
 - `LLM_OLLAMA_UNLOAD_AFTER`: Unload Ollama model after each response. Default `false`.
 - `LLM_URL_STATE`: Save/restore the conversation in the URL `#ai=` fragment so answers survive reloads and links are shareable. Set to `false` to keep conversations out of URLs and browser history. Default `true`.

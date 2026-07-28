@@ -9,6 +9,7 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 # SearXNG module mocks
 searx = ModuleType("searx")
+searx.settings = {"server": {"secret_key": "demo-secret"}}
 searx_plugins = ModuleType("searx.plugins")
 searx_results = ModuleType("searx.result_types")
 

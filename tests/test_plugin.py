@@ -496,6 +496,29 @@ def test_post_search_injects_answer(make_plugin):
     assert 'sxng-collapsed' in html
 
 
+def test_post_search_theme_and_a11y(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    search = MockSearch()
+    p.post_search(None, search)
+    html = list(search.result_container.answers)[0]
+    # theme-safe colors: no hardcoded dark-theme text colors
+    assert 'rgb(230, 232, 240)' not in html
+    assert 'color: white' not in html
+    assert 'var(--color-base-font' in html
+    assert "var(--color-error" in html
+    # screen-reader status region + disclaimer + reduced motion
+    assert 'id="sxng-live-status"' in html
+    assert 'role="status"' in html
+    assert 'May contain mistakes' in html
+    assert 'prefers-reduced-motion' in html
+    # collapse is a whole-line multiple with a fade mask and a Show less toggle
+    assert 'calc(10 * 1.5em)' in html
+    assert 'mask-image' in html
+    assert 'collapseAnswer' in html
+    # error paths reveal the footer for retry
+    assert 'revealFooter();' in html
+
+
 def test_post_search_hides_native_answers(make_plugin):
     p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
     search = MockSearch()

@@ -99,7 +99,7 @@ INTERACTIVE_CSS = '''
                             color: var(--color-base-font, #333);
                             cursor: pointer;
                             transition: all 0.2s ease;
-                            opacity: 0.6;
+                            opacity: 0.7;
                         }
                         .sxng-btn:hover {
                             background: var(--color-base-background-hover, rgba(0,0,0,0.05));
@@ -120,36 +120,41 @@ INTERACTIVE_CSS = '''
                             background: transparent;
                             border: none;
                             color: var(--color-base-font, #333);
-                            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                            font-family: Inter, "Helvetica Neue", Arial, sans-serif;
                             font-size: 16px;
                             padding: 0.5rem 2.5rem 0.5rem 0;
-                            opacity: 0.8;
-                            transition: opacity 0.2s;
                         }
-                        .sxng-input:focus { outline: none; opacity: 1; }
-                        .sxng-input::placeholder { color: var(--color-base-font, #333); opacity: 0.35; }
+                        .sxng-input:focus { outline: none; }
+                        .sxng-input::placeholder { color: var(--color-base-font, #333); opacity: 0.8; }
                         .sxng-input-line {
                             position: absolute;
                             bottom: 0;
                             left: 0;
-                            width: 0;
+                            width: 100%;
                             height: 1px;
                             background: var(--color-result-link, #5e81ac);
-                            transition: width 0.3s ease;
+                            transform: scaleX(0);
+                            transform-origin: left;
+                            transition: transform 0.3s ease;
                         }
-                        .sxng-input:focus + .sxng-input-line { width: 100%; }
+                        .sxng-input:focus + .sxng-input-line { transform: scaleX(1); }
                         .sxng-user-msg {
                             display: block;
                             width: fit-content;
                             max-width: 80%;
                             margin: 0.75rem 0 0.75rem auto;
-                            padding: 0.25rem 0.6rem 0.25rem 0;
-                            border-right: 2px solid var(--color-result-link, #5e81ac);
+                            padding: 0.3rem 0.7rem;
+                            background: var(--color-base-background-hover, rgba(128,128,128,0.08));
+                            border-radius: 8px;
                             text-align: right;
                             font-size: 0.85rem;
                             line-height: 1.4;
-                            opacity: 0.55;
+                            opacity: 0.85;
                             animation: sxng-fade-in-up 0.3s ease-out forwards;
+                        }
+                        @keyframes sxng-fade-in-up {
+                            from { opacity: 0; transform: translateY(4px); }
+                            to { opacity: 0.85; transform: none; }
                         }
                         .sxng-input-submit {
                             all: unset;
@@ -168,7 +173,7 @@ INTERACTIVE_CSS = '''
                             border-radius: 6px;
                             color: var(--color-base-font, #333);
                             cursor: pointer;
-                            opacity: 0.3;
+                            opacity: 0.7;
                             transition: all 0.2s ease;
                         }
                         .sxng-input-wrapper:focus-within .sxng-input-submit,
@@ -178,30 +183,33 @@ INTERACTIVE_CSS = '''
                             background: var(--color-base-background-hover, rgba(0,0,0,0.05)) !important;
                         }
                         .sxng-input-submit svg { width: 18px; height: 18px; fill: currentColor; }
-                        .sxng-input-submit svg { width: 18px; height: 18px; fill: currentColor; }
                         .sxng-reasoning {
-                            margin: 0.5rem 0; padding: 0.5rem;
-                            border-left: 2px solid var(--color-result-link, #5e81ac);
+                            margin: 0.5rem 0; padding: 0.5rem 0.75rem;
                             background: var(--color-base-background-hover, rgba(0,0,0,0.03));
-                            font-size: 0.85rem; opacity: 0.7; transition: opacity 0.2s;
+                            border-radius: 6px;
+                            font-size: 0.85rem; opacity: 0.85; transition: opacity 0.2s;
                         }
                         .sxng-reasoning:hover { opacity: 1; }
                         .sxng-reasoning summary { cursor: pointer; font-weight: bold; color: var(--color-result-link, #5e81ac); }
                         .sxng-thought-content { margin-top: 0.5rem; white-space: pre-wrap; font-family: monospace; }
+                        @media (pointer: coarse) {
+                            .sxng-btn, .sxng-input-submit { width: 44px; height: 44px; }
+                            .sxng-input { padding-right: 3rem; }
+                        }
 '''
 
 INTERACTIVE_HTML = '''
                     <div id="sxng-footer" class="sxng-footer">
-                        <button class="sxng-btn" id="btn-copy" title="Copy to clipboard">
+                        <button class="sxng-btn" id="btn-copy" title="Copy to clipboard" aria-label="Copy answer to clipboard">
                             <svg viewBox="0 0 24 24"><path d="M16 1H4C2.9 1 2 1.9 2 3V17H4V3H16V1M19 5H8C6.9 5 6 5.9 6 7V21C6 22.1 6.9 23 8 23H19C20.1 23 21 22.1 21 21V7C21 5.9 20.1 5 19 5M19 21H8V7H19V21Z"/></svg>
                         </button>
-                        <button class="sxng-btn" id="btn-regen" title="Regenerate answer">
+                        <button class="sxng-btn" id="btn-regen" title="Regenerate answer" aria-label="Regenerate answer">
                             <svg viewBox="0 0 24 24"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4C7.58 4 4.01 7.58 4.01 12C4.01 16.42 7.58 20 12 20C15.73 20 18.84 17.45 19.73 14H17.65C16.83 16.33 14.61 18 12 18C8.69 18 6 15.31 6 12C6 8.69 8.69 6 12 6C13.66 6 15.14 6.69 16.22 7.78L13 11H20V4L17.65 6.35Z"/></svg>
                         </button>
                         <form id="sxng-action-form" class="sxng-input-wrapper" onsubmit="event.preventDefault();">
-                            <input type="text" id="sxng-action-input" class="sxng-input" placeholder="Ask..." aria-label="Ask follow-up" autocomplete="off">
+                            <input type="text" id="sxng-action-input" class="sxng-input" placeholder="Ask a follow-up..." aria-label="Ask a follow-up" autocomplete="off">
                             <div class="sxng-input-line"></div>
-                            <button type="submit" id="btn-action" class="sxng-input-submit" title="Send / Continue">
+                            <button type="submit" id="btn-action" class="sxng-input-submit" title="Send / Continue" aria-label="Send follow-up">
                                 <svg viewBox="0 0 24 24"><path d="M19,7V11H5.83L9.41,7.41L8,6L2,12L8,18L9.41,16.59L5.83,13H21V7H19Z"/></svg>
                             </button>
                         </form>
@@ -434,14 +442,14 @@ INTERACTIVE_JS = r'''
                                 .map(t => t.content)
                                 .join('\n\n');
                             await navigator.clipboard.writeText(text);
-                            btn.innerHTML = '<svg viewBox="0 0 24 24" style="color:#a3be8c;"><path d="M9 16.17L4.83 12L3.41 13.41L9 19L21 7L19.59 5.59L9 16.17Z"/></svg>';
+                            btn.innerHTML = '<svg viewBox="0 0 24 24" style="color:var(--color-success, #a3be8c);"><path d="M9 16.17L4.83 12L3.41 13.41L9 19L21 7L19.59 5.59L9 16.17Z"/></svg>';
                             setTimeout(() => btn.innerHTML = originalContent, 2000);
                         };
 
                         document.getElementById('btn-regen').onclick = async () => {
                             data.innerHTML = '<span class="sxng-cursor"></span>';
                             footer.classList.remove('sxng-ready');
-                            expandAnswer();
+                            expandAnswer(true);
                             
                             if (conversation.turns.length > 0 && conversation.turns[conversation.turns.length - 1].role === 'assistant') {
                                 conversation.turns.pop();
@@ -475,7 +483,7 @@ INTERACTIVE_JS = r'''
                             input.value = '';
                             input.blur();
                             footer.classList.remove('sxng-ready');
-                            expandAnswer();
+                            expandAnswer(true);
 
                             if (val) {
                                 const cursor = data.querySelector('.sxng-cursor');
@@ -554,6 +562,14 @@ FRONTEND_JS_TEMPLATE = r"""
     const data = document.getElementById('sxng-stream-data');
     const answerWrap = document.getElementById('sxng-answer-wrap');
     const showMoreWrap = document.getElementById('sxng-show-more-wrap');
+    // Screen-reader status line (role="status" announces politely).
+    const liveStatus = document.getElementById('sxng-live-status');
+    const announce = (msg) => { if (liveStatus) liveStatus.textContent = msg; };
+    // Error paths must always leave a retry affordance visible.
+    const revealFooter = () => {
+        const f = document.getElementById('sxng-footer');
+        if (f) f.classList.add('sxng-ready');
+    };
     let restored = false;
     let isStreaming = false;
 
@@ -587,9 +603,22 @@ FRONTEND_JS_TEMPLATE = r"""
     }
     hideNativeAnswers();
 
-    function expandAnswer() {
+    // permanent=true retires the toggle for good (new turns streaming in, or
+    // content that fits); otherwise the button flips to "Show less" so the
+    // reader can re-collapse.
+    function expandAnswer(permanent) {
         if (answerWrap) answerWrap.classList.remove('sxng-collapsed');
-        if (showMoreWrap) showMoreWrap.classList.remove('sxng-visible');
+        if (!showMoreWrap) return;
+        if (permanent) {
+            showMoreWrap.classList.remove('sxng-visible');
+            showMoreWrap.classList.add('sxng-gone');
+        } else if (showMoreBtn) {
+            showMoreBtn.textContent = 'Show less';
+        }
+    }
+    function collapseAnswer() {
+        if (answerWrap) answerWrap.classList.add('sxng-collapsed');
+        if (showMoreBtn) showMoreBtn.textContent = 'Show more';
     }
     function updateShowMore() {
         if (!is_collapsed || !answerWrap || !showMoreWrap) return;
@@ -598,11 +627,14 @@ FRONTEND_JS_TEMPLATE = r"""
             showMoreWrap.classList.add('sxng-visible');
         } else {
             // Content fits within the reserved height: release it (only ever shrinks).
-            expandAnswer();
+            expandAnswer(true);
         }
     }
     const showMoreBtn = document.getElementById('sxng-show-more');
-    if (showMoreBtn) showMoreBtn.onclick = expandAnswer;
+    if (showMoreBtn) showMoreBtn.onclick = () => {
+        if (answerWrap && answerWrap.classList.contains('sxng-collapsed')) expandAnswer();
+        else collapseAnswer();
+    };
     
     __CITATION_HELPER_JS__
 
@@ -692,6 +724,7 @@ FRONTEND_JS_TEMPLATE = r"""
         
         isStreaming = true;
         box.classList.add('sxng-streaming');
+        announce('Generating AI summary');
         try {
             const ctx = auxContext || conversation.originalContext;
 
@@ -709,10 +742,15 @@ FRONTEND_JS_TEMPLATE = r"""
 
             clearTimeout(timeoutId);
             if (!res.ok) {
+                console.error('[AI Answers] Stream request failed:', res.status, res.statusText);
+                const staleCursor = data.querySelector('.sxng-cursor');
+                if (staleCursor) staleCursor.remove();
                 const errSpan = document.createElement('span');
-                errSpan.style.color = '#bf616a';
-                errSpan.textContent = "Error: " + res.statusText;
+                errSpan.style.color = 'var(--color-error, #bf616a)';
+                errSpan.textContent = "Couldn't generate a summary. Try again.";
                 data.appendChild(errSpan);
+                announce('AI summary failed');
+                revealFooter();
                 restoreNativeAnswers();
                 return;
             }
@@ -906,13 +944,17 @@ FRONTEND_JS_TEMPLATE = r"""
                 
                 const errSpan = document.createElement('span');
                 if (thoughtDiv && thoughtDiv.textContent.trim().length > 0) {
-                    errSpan.style.color = '#ebcb8b';
-                    errSpan.textContent = 'Model provided reasoning but stopped before the final answer. Try adjusting token limits.';
+                    console.warn('[AI Answers] Reasoning finished without an answer; consider raising token limits.');
+                    errSpan.style.color = 'var(--color-warning, #ebcb8b)';
+                    errSpan.textContent = 'The model stopped before finishing an answer. Try regenerating.';
                 } else {
-                    errSpan.style.color = '#bf616a';
-                    errSpan.textContent = 'No response received. Check API configuration and server logs.';
+                    console.error('[AI Answers] Empty response; check API configuration and server logs.');
+                    errSpan.style.color = 'var(--color-error, #bf616a)';
+                    errSpan.textContent = 'No response from the AI provider. Try again.';
                 }
                 data.appendChild(errSpan);
+                announce('AI summary failed');
+                revealFooter();
                 restoreNativeAnswers();
                 return;
             }
@@ -929,6 +971,8 @@ FRONTEND_JS_TEMPLATE = r"""
             }
 
             __INTERACTIVE_JS_COMPLETE__
+
+            announce('AI summary ready');
 
             if (collectedResponse) {
                 conversation.turns.push({role: 'assistant', content: collectedResponse.trim(), ts: Date.now()});
@@ -949,19 +993,21 @@ FRONTEND_JS_TEMPLATE = r"""
             }
             console.error('[AI Answers] Fatal stream exception:', e);
             const errSpan = document.createElement('span');
-            errSpan.style.cssText = 'color: #bf616a; font-weight: bold; display: block; margin-top: 0.5rem;';
-            
+            errSpan.style.cssText = 'color: var(--color-error, #bf616a); font-weight: bold; display: block; margin-top: 0.5rem;';
+
             if (e.name === 'AbortError') {
-                errSpan.textContent = "⚠️ Connection to AI provider timed out.";
+                errSpan.textContent = "The AI provider took too long to respond. Try again.";
             } else {
-                errSpan.textContent = "⚠️ AI Widget encountered a fatal error. Check browser console.";
+                errSpan.textContent = "Something went wrong while generating the summary. Try again.";
             }
-            
+
             if (data) {
                 const cursor = data.querySelector('.sxng-cursor');
                 if (cursor) cursor.remove();
                 data.appendChild(errSpan);
             }
+            announce('AI summary failed');
+            revealFooter();
             restoreNativeAnswers();
         } finally {
             isStreaming = false;
@@ -1790,14 +1836,17 @@ class SXNGPlugin(Plugin):
                             from {{ opacity: 0; }}
                             to {{ opacity: 1; }}
                         }}
+                        #sxng-answer-wrap {{
+                            font-family: Inter, "Helvetica Neue", Arial, sans-serif;
+                            font-size: 15px;
+                            line-height: 1.5;
+                            color: var(--color-base-font, inherit);
+                        }}
                         #sxng-stream-data {{
                             position: relative;
                             margin: 0;
                             min-height: 1.5em;
-                            font-family: Inter, "Helvetica Neue", Arial, sans-serif;
-                            font-size: 15px;
-                            line-height: 20px;
-                            color: rgb(230, 232, 240);
+                            text-wrap: pretty;
                         }}
                         .sxng-cursor {{
                             display: inline-block;
@@ -1824,7 +1873,21 @@ class SXNGPlugin(Plugin):
                             margin-bottom: 0.6rem;
                             font-weight: 600;
                             font-size: 16px;
-                            color: white;
+                            color: var(--color-base-font, inherit);
+                        }}
+                        .sxng-ai-note {{
+                            margin-left: auto;
+                            font-weight: 400;
+                            font-size: 12px;
+                            opacity: 0.8;
+                        }}
+                        .sxng-visually-hidden {{
+                            position: absolute;
+                            width: 1px;
+                            height: 1px;
+                            overflow: hidden;
+                            clip-path: inset(50%);
+                            white-space: nowrap;
                         }}
                         .sxng-ai-header svg {{
                             width: 18px;
@@ -1841,7 +1904,7 @@ class SXNGPlugin(Plugin):
                             animation: sxng-sparkle-pulse 1.6s ease-in-out infinite;
                         }}
                         #sxng-stream-data .sxng-md-p {{ margin: 0 0 0.5rem; white-space: normal; }}
-                        #sxng-stream-data .sxng-md-h {{ font-weight: bold; margin: 0.6rem 0 0.3rem; white-space: normal; }}
+                        #sxng-stream-data .sxng-md-h {{ font-weight: 600; font-size: 16px; margin: 0.6rem 0 0.3rem; white-space: normal; }}
                         #sxng-stream-data .sxng-md-list {{ margin: 0.2rem 0 0.5rem 1.4rem; padding: 0; white-space: normal; }}
                         #sxng-stream-data .sxng-md-list li {{ margin: 0.1rem 0; }}
                         #sxng-stream-data code {{
@@ -1852,9 +1915,13 @@ class SXNGPlugin(Plugin):
                             border-radius: 3px;
                         }}
                         #sxng-answer-wrap.sxng-collapsed {{
-                            /* fixed height from first paint through completion: zero layout shift */
-                            height: 14rem;
+                            /* fixed height from first paint through completion: zero layout shift.
+                               Whole line multiple (1 line = 1.5em) so text is never cut mid-glyph */
+                            height: calc(10 * 1.5em);
                             overflow: hidden;
+                            /* fade the last lines out so the truncation reads as intentional */
+                            -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 2.5em), transparent);
+                            mask-image: linear-gradient(to bottom, #000 calc(100% - 2.5em), transparent);
                         }}
                         .sxng-show-more-wrap {{
                             height: 2rem;
@@ -1868,6 +1935,9 @@ class SXNGPlugin(Plugin):
                             opacity: 1;
                             pointer-events: auto;
                         }}
+                        .sxng-show-more-wrap.sxng-gone {{
+                            display: none;
+                        }}
                         .sxng-show-more-btn {{
                             background: transparent;
                             border: 1px solid var(--color-result-link, #5e81ac);
@@ -1876,11 +1946,21 @@ class SXNGPlugin(Plugin):
                             padding: 0.15rem 0.7rem;
                             font-size: 0.85rem;
                             cursor: pointer;
-                            opacity: 0.85;
                         }}
                         .sxng-show-more-btn:hover {{
-                            opacity: 1;
                             background: var(--color-base-background-hover, rgba(0,0,0,0.05));
+                        }}
+                        @media (prefers-reduced-motion: reduce) {{
+                            .sxng-cursor,
+                            .sxng-chunk,
+                            .sxng-user-msg,
+                            #sxng-stream-box.sxng-streaming .sxng-ai-header svg {{ animation: none; }}
+                            .sxng-cursor {{ opacity: 0.6; }}
+                            .sxng-footer, .sxng-show-more-wrap, .sxng-btn,
+                            .sxng-input, .sxng-input-line, .sxng-input-submit {{ transition: none; }}
+                        }}
+                        @media (pointer: coarse) {{
+                            .sxng-show-more-btn {{ padding: 0.55rem 1rem; }}
                         }}
                         {interactive_css}
                     </style>
@@ -1894,7 +1974,9 @@ class SXNGPlugin(Plugin):
                             <path d="M20 12h2" />
                         </svg>
                         <span>AI Summary</span>
+                        <span class="sxng-ai-note">May contain mistakes</span>
                     </div>
+                    <span id="sxng-live-status" role="status" class="sxng-visually-hidden"></span>
                     <div id="sxng-answer-wrap" class="{collapsed_class}">
                         <p id="sxng-stream-data" style="white-space: pre-wrap; margin:0;"><span class="sxng-cursor"></span></p>
                     </div>
