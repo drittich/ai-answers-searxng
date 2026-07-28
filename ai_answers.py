@@ -566,7 +566,7 @@ FRONTEND_JS_TEMPLATE = r"""
     window.addEventListener('beforeunload', _markUnloading);
 
     // The AI panel is injected as a SearXNG answer, so native answers (e.g.
-    // the Wikipedia summary) render as siblings and duplicate the overview.
+    // the Wikipedia summary) render as siblings and duplicate the summary.
     // Hide them while the panel is live; restore if the AI answer fails.
     const hiddenAnswers = [];
     function hideNativeAnswers() {
@@ -622,7 +622,7 @@ FRONTEND_JS_TEMPLATE = r"""
             details.className = 'sidebar-collapsable';
             const summary = document.createElement('summary');
             summary.className = 'title';
-            summary.textContent = 'AI overview metrics';
+            summary.textContent = 'AI summary metrics';
             details.appendChild(summary);
             table = document.createElement('table');
             table.id = 'sxng-ai-metrics-table';
