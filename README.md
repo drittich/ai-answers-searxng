@@ -61,14 +61,13 @@ Add a volume line under the SearXNG service:
 
 ### Step 3 — Add LLM environment variables to `.env`
 
-Open `.env` and add the variables for your provider, for example (DeepSeek V4 Flash via OpenRouter):
+Open `.env` and add the variables for your provider, for example (Qwen3.7 Flash via OpenRouter, thinking disabled for fast answers):
 
 ```
 LLM_PROVIDER=openrouter
 LLM_KEY=sk-or-xxxxxxxx
-LLM_MODEL=deepseek/deepseek-v4-flash
-LLM_REASONING_MAX_TOKENS=2000
-LLM_EXTRA_BODY={"reasoning_effort": "high"}
+LLM_MODEL=qwen/qwen3.7-flash
+LLM_REASONING_EFFORT=off
 ```
 
 See the provider reference table below for other options.
@@ -104,7 +103,7 @@ docker compose logs -f core
 On startup the plugin logs its resolved config, e.g.:
 
 ```
-INFO:searx.plugins.ai_answers: AI Answers: provider=openrouter model=deepseek/deepseek-v4-flash endpoint=https://openrouter.ai/api/v1/chat/completions max_tokens=500 reasoning_max_tokens=2000 interactive=True collapsed=True
+INFO:searx.plugins.ai_answers: AI Answers: provider=openrouter model=qwen/qwen3.7-flash endpoint=https://openrouter.ai/api/v1/chat/completions max_tokens=500 reasoning_max_tokens=0 reasoning_effort=off interactive=True collapsed=True
 ```
 
 Then run a search in SearXNG. You should see the AI answer stream in above the regular results.
@@ -128,8 +127,9 @@ Configure via the environment variables:
 - `LLM_URL`: Overrides endpoint URL for any provider preset. Include the scheme — local providers usually need an explicit `http://`.
 - `LLM_SYSTEM_PROMPT`: Overrides the persona line of the system prompt. Default `You are a precise search-answer engine that synthesizes the provided web sources into a direct, citation-accurate answer.`.
 - `LLM_MAX_TOKENS`: Answer token budget. Default `500`.
-- `LLM_REASONING_MAX_TOKENS`: Extra token headroom for thinking/reasoning models, added on top of `LLM_MAX_TOKENS` in the API request. Without it, a reasoning model can spend the whole budget thinking and never produce the answer. Default `0`. Suggested `1000`–`4000` for models like DeepSeek V4 Flash in thinking mode.
-- `LLM_EXTRA_BODY`: JSON object merged into the chat-completions request body — use for provider-specific parameters, e.g. `{"reasoning_effort": "high"}` (DeepSeek thinking effort) or `{"provider": {"order": ["..."]}}` (OpenRouter routing). Default unset.
+- `LLM_REASONING_EFFORT`: Controls thinking on reasoning-capable models via OpenRouter's unified `reasoning` parameter: `off` (also `none`/`disable`) disables thinking entirely — recommended for fast search answers — or `minimal`/`low`/`medium`/`high` sets the effort. Only sent for `LLM_PROVIDER=openrouter`; for other providers use `LLM_EXTRA_BODY`. Default unset (the model's own default applies — note that models like Qwen3.7 Flash think by default, so set this or `LLM_REASONING_MAX_TOKENS`).
+- `LLM_REASONING_MAX_TOKENS`: Extra token headroom for thinking/reasoning models, added on top of `LLM_MAX_TOKENS` in the API request. Without it, a model that thinks can spend the whole budget reasoning and never produce the answer. Default `0`. Suggested `1000`–`4000` when thinking is enabled.
+- `LLM_EXTRA_BODY`: JSON object merged into the chat-completions request body (overrides anything the plugin sets, including `reasoning`) — use for provider-specific parameters, e.g. `{"reasoning_effort": "high"}` (DeepSeek native API) or `{"provider": {"order": ["..."]}}` (OpenRouter routing). Default unset.
 - `LLM_TEMPERATURE`: Default `0.2`.
 - `LLM_CONTEXT_DEEP_COUNT`: results as context with full snippets. Default `5`.
 - `LLM_CONTEXT_SHALLOW_COUNT`: Results with headlines only (additional breadth). Default `15`.
@@ -147,7 +147,7 @@ Configure via the environment variables:
 4. token optimized context extracted
 5. inject the ui/logic "shell" into standard results answer object
 6. client side script calls custom endpoint with signed token
-7. LLM response streams back token by token; thinking (`reasoning_content` or `<think>` tags) renders into a collapsible box, and the answer renders as markdown with linked citations live while it streams (completed blocks render once; only the trailing partial block re-renders per frame)
+7. LLM response streams back token by token; thinking (`reasoning`/`reasoning_content` deltas or `<think>` tags) renders into a collapsible box, and the answer renders as markdown with linked citations live while it streams (completed blocks render once; only the trailing partial block re-renders per frame)
 
 ## Security notes
 
@@ -160,20 +160,28 @@ Configure via the environment variables:
 
 ## Examples
 
-### DeepSeek V4 Flash via OpenRouter (recommended)
+### Qwen3.7 Flash via OpenRouter (recommended)
+```
+LLM_PROVIDER=openrouter
+LLM_KEY=sk-or-xxx
+LLM_MODEL=qwen/qwen3.7-flash
+LLM_REASONING_EFFORT=off
+```
+
+Fast and inexpensive (~$0.03/M input). For harder queries, trade latency for depth by enabling thinking:
+
+```
+LLM_REASONING_EFFORT=low
+LLM_REASONING_MAX_TOKENS=2000
+```
+
+### DeepSeek V4 Flash via OpenRouter
 ```
 LLM_PROVIDER=openrouter
 LLM_KEY=sk-or-xxx
 LLM_MODEL=deepseek/deepseek-v4-flash
+LLM_REASONING_EFFORT=high
 LLM_REASONING_MAX_TOKENS=2000
-LLM_EXTRA_BODY={"reasoning_effort": "high"}
-```
-
-### OpenRouter
-```
-LLM_PROVIDER=openrouter
-LLM_KEY=sk-or-xxx
-LLM_MODEL=google/gemma-3-27b-it:free
 ```
 
 ### Ollama (Local)
@@ -217,7 +225,7 @@ LLM_MODEL=meta-llama/Meta-Llama-3-8B-Instruct
 - **`No module named 'searx.plugins.ai_answers'` / `plugin ... is not implemented`** — the file isn't where SearXNG expects it, or is misnamed. It must be mounted/placed at `searx/plugins/ai_answers.py` exactly (underscore, not hyphen).
 - **`[SSL: WRONG_VERSION_NUMBER]` or name-resolution errors with a local provider** — your `LLM_URL` is being called over https. Use an explicit `http://` prefix for non-TLS local endpoints. The plugin logs a warning at startup when it has to assume a scheme.
 - **Answer box never appears** — check `docker compose logs core` for the plugin's startup line. Missing `LLM_PROVIDER`/`LLM_URL` or `LLM_KEY` is logged as a warning. Also check the plugin is enabled in your own Preferences (it's per-user).
-- **"Model provided reasoning but stopped before the final answer"** — the model spent the whole token budget thinking. Set `LLM_REASONING_MAX_TOKENS` (e.g. `2000`).
+- **"Model provided reasoning but stopped before the final answer"** — the model spent the whole token budget thinking. Set `LLM_REASONING_EFFORT=off` (OpenRouter) to disable thinking, or give it headroom with `LLM_REASONING_MAX_TOKENS` (e.g. `2000`).
 - **Ollama on the Windows host, SearXNG in Docker** — `localhost` inside the container refers to the container itself. Use `LLM_URL=http://host.docker.internal:11434/v1/chat/completions`.
 
 ## Development

@@ -60,6 +60,18 @@ def test_reasoning_max_tokens(make_plugin):
     assert p.reasoning_max_tokens == 0
 
 
+def test_reasoning_effort_parsing(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    assert p.reasoning_effort == ''
+    for alias in ('off', 'none', 'disable', 'disabled', 'OFF'):
+        p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_REASONING_EFFORT=alias)
+        assert p.reasoning_effort == 'off'
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_REASONING_EFFORT='low')
+    assert p.reasoning_effort == 'low'
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_REASONING_EFFORT='banana')
+    assert p.reasoning_effort == ''
+
+
 def test_extra_body_parsing(make_plugin):
     p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k',
                     LLM_EXTRA_BODY='{"reasoning_effort": "high", "top_p": 0.9}')
@@ -295,6 +307,40 @@ def test_stream_reasoning_content_wrapped_in_think_tags(make_plugin, monkeypatch
     assert out.index("</think>") < out.index("The sky is blue")
 
 
+def test_stream_openrouter_reasoning_field_wrapped_in_think_tags(make_plugin, monkeypatch):
+    """OpenRouter's normalized schema uses delta.reasoning, not reasoning_content."""
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    lines = [
+        _delta(reasoning="hmm, "),
+        _delta(reasoning="Rayleigh scattering", content=None),
+        _delta(content="The sky is blue [1]."),
+        "data: [DONE]\n",
+    ]
+    _, out = _stream_with(monkeypatch, p, lines)
+    assert "<think>" in out and "</think>" in out
+    assert "hmm, Rayleigh scattering" in out
+    assert out.index("</think>") < out.index("The sky is blue")
+
+
+def test_reasoning_effort_sent_to_openrouter(make_plugin, monkeypatch):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_REASONING_EFFORT='off')
+    conn, _ = _stream_with(monkeypatch, p, ["data: [DONE]\n"])
+    assert json.loads(conn.requests[0]["body"])["reasoning"] == {"enabled": False}
+
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_REASONING_EFFORT='low')
+    conn, _ = _stream_with(monkeypatch, p, ["data: [DONE]\n"])
+    assert json.loads(conn.requests[0]["body"])["reasoning"] == {"effort": "low"}
+
+    # unset -> param absent; extra body wins over the effort setting
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    conn, _ = _stream_with(monkeypatch, p, ["data: [DONE]\n"])
+    assert "reasoning" not in json.loads(conn.requests[0]["body"])
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_REASONING_EFFORT='off',
+                    LLM_EXTRA_BODY='{"reasoning": {"effort": "high"}}')
+    conn, _ = _stream_with(monkeypatch, p, ["data: [DONE]\n"])
+    assert json.loads(conn.requests[0]["body"])["reasoning"] == {"effort": "high"}
+
+
 def test_stream_reasoning_only_still_closes_think_tag(make_plugin, monkeypatch):
     p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
     lines = [_delta(reasoning_content="thinking forever"), "data: [DONE]\n"]
@@ -359,10 +405,23 @@ def test_default_prompt_anti_injection_and_recency(make_plugin, monkeypatch):
     conn, _ = _stream_with(monkeypatch, p, ["data: [DONE]\n"])
     system = json.loads(conn.requests[0]["body"])["messages"][0]["content"]
     assert "untrusted" in system
-    assert "publishedDate" in system
+    assert "published date" in system
     assert "Valid citation indices" in system
+    assert "headlines only" in system
     assert "[*]" in system
     assert "Insufficient information to answer." in system
+
+
+def test_max_source_idx_ignores_brackets_inside_snippets(make_plugin, monkeypatch):
+    import ai_answers
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    conn = FakeConn(FakeHTTPResponse(200, ["data: [DONE]\n"]))
+    monkeypatch.setattr(ai_answers, "_get_streaming_connection", lambda url: (conn, "/v1/chat/completions"))
+    client = _make_app(p)
+    ctx = "[1] example.com: Best of [2023]: snippet\n[2] other.com: Title: text"
+    client.post('/ai-stream', json={"q": "test", "context": ctx, "tk": _token(p)}).get_data()
+    system = json.loads(conn.requests[0]["body"])["messages"][0]["content"]
+    assert "1-2" in system and "1-2023" not in system
 
 
 def test_stream_caps_context_and_q(make_plugin, monkeypatch):
