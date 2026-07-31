@@ -84,11 +84,17 @@ Open `core-config\settings.yml` and add (or extend) the `plugins:` section:
 plugins:
   searx.plugins.ai_answers.SXNGPlugin:
     active: true
+  # Optional: adds a per-user "Follow-up questions" toggle on the Preferences
+  # page, directly beneath the main AI Answers toggle. Off by default (opt-in).
+  searx.plugins.ai_answers.AIFollowupsPlugin:
+    active: false
 ```
 
-If a `plugins:` key already exists, add this entry under it rather than creating a second `plugins:` block.
+If a `plugins:` key already exists, add these entries under it rather than creating a second `plugins:` block.
 
 `active: true` is only the *default* — each user can turn the plugin on or off for themselves under **Preferences → General → AI Answers Plugin** (stored in their browser's preferences cookie). On a shared instance you can set `active: false` and let users opt in.
+
+The optional `AIFollowupsPlugin` entry is a second plugin whose only job is to render a **Follow-up questions** checkbox on the Preferences page (SearXNG gives each plugin a single on/off switch). Register it right after the main plugin so the toggle appears directly beneath it. When enabled, the AI answer suggests clickable follow-up questions below each response. Leave it out entirely and follow-ups are controlled instance-wide by the `LLM_FOLLOWUPS` env var instead (see below).
 
 ### Step 5 — Recreate the container
 
@@ -139,6 +145,7 @@ Configure via the environment variables:
 - `LLM_CONTEXT_SHALLOW_COUNT`: Results with headlines only (additional breadth). Default `15`.
 - `LLM_TABS`: Tab whitelist, comma delimiter. Default `general,science,it,news`.
 - `LLM_INTERACTIVE`: UI mode. Default is `true` (interactive: copy, regenerate, follow up). Set to `false` for simple response only mode.
+- `LLM_FOLLOWUPS`: Instance-wide default for the follow-up question chips shown below the answer (interactive mode only). Default `false`. If you register the `AIFollowupsPlugin` toggle (see above), each user's per-user setting takes precedence over this value; otherwise this controls it for everyone.
 - `LLM_COLLAPSED`: Show the answer as a fixed-height preview with a "Show more" / "Show less" toggle (no layout shift while streaming). Set to `false` for the always-expanded behavior. Default `true`.
 - `LLM_QUESTION_MARK_REQUIRED`: Only trigger AI answers when the query contains `?`. Default `false`.
 - `LLM_OLLAMA_UNLOAD_AFTER`: Unload Ollama model after each response. Default `false`.

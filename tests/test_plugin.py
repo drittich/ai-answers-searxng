@@ -6,6 +6,53 @@ import time
 import pytest
 
 
+# ---------------------------------------------------------------- follow-ups
+
+def _req_with_plugin_choices(choices):
+    """Minimal stand-in for an SXNG request carrying per-user plugin prefs."""
+    class Plugins:
+        def __init__(self, c): self.choices = c
+    class Prefs:
+        def __init__(self, c): self.plugins = Plugins(c)
+    class Req:
+        def __init__(self, c): self.preferences = Prefs(c)
+    return Req(choices)
+
+
+def test_followups_default_off(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    assert p.followups is False
+    # No preferences on the request -> falls back to the (off) env default.
+    assert p._followups_enabled(object()) is False
+
+
+def test_followups_env_var_enables(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_FOLLOWUPS='true')
+    assert p.followups is True
+    assert p._followups_enabled(object()) is True
+
+
+def test_followups_per_user_toggle_overrides_env(make_plugin):
+    import ai_answers
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_FOLLOWUPS='true')
+    pid = ai_answers.FOLLOWUPS_PLUGIN_ID
+    # User toggle off wins over the instance-wide env default.
+    assert p._followups_enabled(_req_with_plugin_choices({pid: False})) is False
+    # User toggle on.
+    assert p._followups_enabled(_req_with_plugin_choices({pid: True})) is True
+    # Toggle absent (companion plugin not registered) -> env fallback.
+    assert p._followups_enabled(_req_with_plugin_choices({})) is True
+
+
+def test_followups_companion_plugin_defaults_opt_in():
+    import ai_answers
+    class Cfg:
+        active = False
+    comp = ai_answers.AIFollowupsPlugin(Cfg())
+    assert comp.id == ai_answers.FOLLOWUPS_PLUGIN_ID
+    assert comp.active is False  # off by default (opt-in)
+
+
 # ---------------------------------------------------------------- config
 
 def test_no_provider_means_inactive(make_plugin):

@@ -57,6 +57,10 @@ def _get_streaming_connection(url: str):
 PLUGIN_NAME = "AI Answers"
 DEFAULT_TABS = "general,science,it,news"
 
+# id of the companion plugin that acts as the per-user "Follow-up questions"
+# toggle on the SearXNG preferences page (see AIFollowupsPlugin).
+FOLLOWUPS_PLUGIN_ID = "ai_answers_followups"
+
 PROVIDER_PRESETS = {
     'openai':     {'url': 'https://api.openai.com/v1/chat/completions',       'model': 'gpt-4o-mini'},
     'openrouter': {'url': 'https://openrouter.ai/api/v1/chat/completions',    'model': 'qwen/qwen3.7-flash'},
@@ -654,6 +658,7 @@ FRONTEND_JS_TEMPLATE = r"""
     const is_collapsed = __IS_COLLAPSED__;
     const url_state = __URL_STATE__;
     const show_metrics = __SHOW_METRICS__;
+    const show_followups = __SHOW_FOLLOWUPS__;
     const box = document.getElementById('sxng-stream-box');
     const data = document.getElementById('sxng-stream-data');
     const answerWrap = document.getElementById('sxng-answer-wrap');
@@ -816,7 +821,7 @@ FRONTEND_JS_TEMPLATE = r"""
     function renderFollowups(list) {
         if (!followupsEl) return;
         followupsEl.textContent = '';
-        if (!is_interactive || !list || !list.length) return;
+        if (!is_interactive || !show_followups || !list || !list.length) return;
         list.forEach(q => {
             const chip = document.createElement('button');
             chip.type = 'button';
@@ -1348,6 +1353,7 @@ class SXNGPlugin(Plugin):
         self.interactive = os.getenv('LLM_INTERACTIVE', 'true').lower().strip() in ('true', '1', 'yes', 'on')
         self.collapsed = os.getenv('LLM_COLLAPSED', 'true').lower().strip() in ('true', '1', 'yes', 'on')
         self.show_metrics = os.getenv('LLM_SHOW_METRICS', 'true').lower().strip() in ('true', '1', 'yes', 'on')
+        self.followups = os.getenv('LLM_FOLLOWUPS', 'false').lower().strip() in ('true', '1', 'yes', 'on')
         self.question_mark_required = os.getenv('LLM_QUESTION_MARK_REQUIRED', 'false').lower().strip() in ('true', '1', 'yes', 'on')
         raw_provider = os.getenv('LLM_PROVIDER', '').lower().strip()
         
@@ -1692,7 +1698,7 @@ class SXNGPlugin(Plugin):
             instructions = [task] + CORE_RULES + [grounding]
             if history_rule:
                 instructions.append(history_rule)
-            if self.interactive:
+            if self.interactive and self._followups_enabled(request):
                 # Trailing machine-readable block the client splits off into
                 # clickable follow-up chips; it must never appear in the prose.
                 instructions.append(
@@ -2069,6 +2075,21 @@ class SXNGPlugin(Plugin):
         
         return "\n\n".join(context_parts), result_urls
 
+    def _followups_enabled(self, request) -> bool:
+        # Per-user "Follow-up questions" toggle on the SearXNG preferences page is
+        # exposed by the companion AIFollowupsPlugin (SearXNG gives each plugin a
+        # single on/off switch). When that plugin is registered, its per-user
+        # state wins; otherwise fall back to the instance-wide LLM_FOLLOWUPS env
+        # var. Defensive: request/preferences may be absent (e.g. in tests).
+        try:
+            prefs = getattr(request, 'preferences', None)
+            choices = getattr(getattr(prefs, 'plugins', None), 'choices', None)
+            if choices is not None and FOLLOWUPS_PLUGIN_ID in choices:
+                return bool(choices[FOLLOWUPS_PLUGIN_ID])
+        except Exception:
+            pass
+        return self.followups
+
     def post_search(self, request: "SXNG_Request", search: "SearchWithPlugins") -> EngineResults:
         results = EngineResults()
         try:
@@ -2115,7 +2136,8 @@ class SXNGPlugin(Plugin):
             js_script_root = safe_json((request.script_root if request else '').rstrip('/'))
 
             is_interactive = self.interactive
-            
+            show_followups = is_interactive and self._followups_enabled(request)
+
             interactive_css = INTERACTIVE_CSS if is_interactive else ''
             interactive_html = INTERACTIVE_HTML if is_interactive else ''
             interactive_js_init = INTERACTIVE_JS if is_interactive else ''
@@ -2130,6 +2152,7 @@ class SXNGPlugin(Plugin):
                 .replace("__IS_COLLAPSED__", 'true' if self.collapsed else 'false') \
                 .replace("__URL_STATE__", 'true' if self.url_state else 'false') \
                 .replace("__SHOW_METRICS__", 'true' if self.show_metrics else 'false') \
+                .replace("__SHOW_FOLLOWUPS__", 'true' if show_followups else 'false') \
                 .replace("__TK__", js_tk) \
                 .replace("__SCRIPT_ROOT__", js_script_root) \
                 .replace("__CITATION_HELPER_JS__", CITATION_HELPER_JS) \
@@ -2290,23 +2313,23 @@ class SXNGPlugin(Plugin):
                         .sxng-sources {{
                             display: flex;
                             flex-wrap: wrap;
-                            gap: 0.4rem;
-                            margin: 0.7rem 0 0;
+                            gap: 0.3rem;
+                            margin: 0.5rem 0 0;
                         }}
                         .sxng-sources:empty {{ display: none; }}
                         .sxng-source-chip {{
                             display: inline-flex;
                             align-items: center;
-                            gap: 0.35rem;
-                            max-width: 220px;
-                            padding: 0.2rem 0.55rem;
+                            gap: 0.3rem;
+                            max-width: 200px;
+                            padding: 0.1rem 0.4rem;
                             border: 1px solid var(--color-base-border, rgba(128,128,128,0.28));
                             border-radius: 999px;
                             background: var(--color-base-background-hover, rgba(128,128,128,0.06));
                             color: var(--color-base-font, inherit);
                             text-decoration: none;
-                            font-size: 0.8rem;
-                            line-height: 1.25;
+                            font-size: 0.72rem;
+                            line-height: 1.2;
                         }}
                         .sxng-source-chip:hover {{
                             border-color: var(--color-result-link, #5e81ac);
@@ -2318,19 +2341,19 @@ class SXNGPlugin(Plugin):
                             text-overflow: ellipsis;
                         }}
                         .sxng-source-favicon {{
-                            width: 16px; height: 16px;
+                            width: 13px; height: 13px;
                             border-radius: 3px;
                             flex-shrink: 0;
                             object-fit: contain;
                         }}
                         .sxng-source-monogram {{
-                            width: 16px; height: 16px;
+                            width: 13px; height: 13px;
                             border-radius: 3px;
                             flex-shrink: 0;
                             display: inline-flex;
                             align-items: center;
                             justify-content: center;
-                            font-size: 10px;
+                            font-size: 9px;
                             font-weight: 700;
                             color: #fff;
                             text-transform: uppercase;
@@ -2467,3 +2490,29 @@ class SXNGPlugin(Plugin):
         except Exception as e:
             logger.error(f"{PLUGIN_NAME}: {e}")
         return results
+
+
+class AIFollowupsPlugin(Plugin):
+    """Per-user "Follow-up questions" switch for the AI Answers plugin.
+
+    SearXNG renders exactly one on/off toggle per registered plugin, so this
+    companion plugin exists purely to add a second checkbox on the Preferences
+    page. It performs no search-time work itself; the main SXNGPlugin reads this
+    plugin's per-user state (see SXNGPlugin._followups_enabled) to decide whether
+    to request and show follow-up suggestion chips. Register it right after the
+    main plugin in settings.yml so the toggle appears directly beneath it.
+
+    Defaults to off (opt-in): the `active = False` default becomes each user's
+    initial toggle state.
+    """
+    id = FOLLOWUPS_PLUGIN_ID
+    active = False
+
+    def __init__(self, plg_cfg: "PluginCfg"):
+        super().__init__(plg_cfg)
+        self.info = PluginInfo(
+            id=self.id,
+            name=gettext(f"{PLUGIN_NAME}: Follow-up questions"),
+            description=gettext("Suggest clickable follow-up questions below each AI answer."),
+            preference_section="general",
+        )
