@@ -223,6 +223,72 @@ CITATION_HELPER_JS = r'''
                             return (typeof u === 'string' && /^https?:\/\//i.test(u.trim())) ? u : '';
                         }
 
+                        // Citation hover/tap preview: a single shared popover showing
+                        // the source title + domain. Hover on desktop; tap-to-reveal,
+                        // tap-again-to-open on touch.
+                        let _citePreviewEl = null, _citeHideTimer = null;
+                        function _getCitePreview() {
+                            if (_citePreviewEl) return _citePreviewEl;
+                            const el = document.createElement('div');
+                            el.className = 'sxng-cite-preview';
+                            el.setAttribute('role', 'tooltip');
+                            document.body.appendChild(el);
+                            _citePreviewEl = el;
+                            return el;
+                        }
+                        function _showCitePreview(anchor, idx) {
+                            const title = (typeof titles !== 'undefined' && titles[idx - 1]) ? titles[idx - 1] : '';
+                            let host = '';
+                            try { host = new URL(anchor.href).hostname.replace(/^www\./, ''); } catch (e) {}
+                            const el = _getCitePreview();
+                            el.textContent = '';
+                            if (title) {
+                                const t = document.createElement('div');
+                                t.className = 'sxng-cite-preview-title';
+                                t.textContent = title;
+                                el.appendChild(t);
+                            }
+                            const h = document.createElement('div');
+                            h.className = 'sxng-cite-preview-host';
+                            h.textContent = host || anchor.href;
+                            el.appendChild(h);
+                            el.style.display = 'block';
+                            const r = anchor.getBoundingClientRect();
+                            const maxLeft = window.scrollX + document.documentElement.clientWidth - el.offsetWidth - 8;
+                            const left = Math.max(window.scrollX + 8, Math.min(r.left + window.scrollX, maxLeft));
+                            el.style.left = left + 'px';
+                            el.style.top = (r.bottom + window.scrollY + 6) + 'px';
+                            el.classList.add('sxng-visible');
+                        }
+                        function _hideCitePreview() {
+                            if (_citePreviewEl) {
+                                _citePreviewEl.classList.remove('sxng-visible');
+                                _citePreviewEl.style.display = 'none';
+                            }
+                        }
+                        const _isCoarse = () => window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+                        function attachCitePreview(a, idx) {
+                            a.addEventListener('mouseenter', () => { clearTimeout(_citeHideTimer); _showCitePreview(a, idx); });
+                            a.addEventListener('mouseleave', () => { _citeHideTimer = setTimeout(_hideCitePreview, 120); });
+                            a.addEventListener('focus', () => _showCitePreview(a, idx));
+                            a.addEventListener('blur', _hideCitePreview);
+                            let armed = false;
+                            a.addEventListener('click', (e) => {
+                                if (_isCoarse() && !armed) {
+                                    e.preventDefault();
+                                    armed = true;
+                                    _showCitePreview(a, idx);
+                                    const clear = (ev) => {
+                                        if (ev.target !== a) {
+                                            armed = false; _hideCitePreview();
+                                            document.removeEventListener('click', clear, true);
+                                        }
+                                    };
+                                    setTimeout(() => document.addEventListener('click', clear, true), 0);
+                                }
+                            });
+                        }
+
                         function renderCitations(text, urls) {
                             const fragment = document.createDocumentFragment();
                             const re = /\[(\d{1,2}(?:\s*,\s*\d{1,2})*)\]/g;
@@ -244,9 +310,11 @@ CITATION_HELPER_JS = r'''
                                             const a = document.createElement('a');
                                             a.href = url;
                                             a.target = '_blank';
+                                            a.rel = 'noopener noreferrer';
                                             a.style.cssText = 'text-decoration:none;color:var(--color-result-link);font-weight:bold;';
                                             a.textContent = `[${n.trim()}]`;
-                                            a.className = 'sxng-chunk';
+                                            a.className = 'sxng-chunk sxng-cite';
+                                            attachCitePreview(a, idx);
                                             fragment.appendChild(a);
                                         } else {
                                             const s = document.createElement('span');
@@ -428,6 +496,7 @@ INTERACTIVE_JS = r'''
                                     });
                                     if(footer && is_interactive) footer.classList.add('sxng-ready');
                                     updateShowMore();
+                                    if (typeof renderSources === 'function') renderSources();
                                     restored = true;
                                 }
                             } catch(e) { console.warn('Restore failed', e); }
@@ -469,10 +538,10 @@ INTERACTIVE_JS = r'''
                             updateState();
                         };
 
-                        const handleAction = async (e) => {
+                        const handleAction = async (e, forcedVal) => {
                             if (e) e.preventDefault();
-                            const val = input.value.trim();
-                            
+                            const val = (typeof forcedVal === 'string' ? forcedVal : input.value).trim();
+
                             conversation.turns.push({role: 'user', content: val, ts: Date.now()});
                             updateState();
                             
@@ -513,6 +582,9 @@ INTERACTIVE_JS = r'''
                                         auxContext = `FRESH SOURCES (most relevant):\\n${auxData.context}\\n\\nBACKGROUND (for reference):\\n${originalBackground}`;
                                         if (auxData.new_urls && Array.isArray(auxData.new_urls)) {
                                             urls = urls.concat(auxData.new_urls.map(safeCitationUrl));
+                                            titles = titles.concat(auxData.new_titles || auxData.new_urls.map(() => ''));
+                                            favicons = favicons.concat(auxData.new_favicons || auxData.new_urls.map(() => ''));
+                                            if (typeof renderSources === 'function') renderSources();
                                         }
                                     }
                                 } catch (err) {}
@@ -534,9 +606,29 @@ INTERACTIVE_JS = r'''
 
                         document.getElementById('sxng-action-form').onsubmit = handleAction;
                         input.onfocus = () => {
-                            setTimeout(() => {
-                                input.scrollIntoView({behavior: 'smooth', block: 'center'});
-                            }, 300);
+                            // Keep the input above the on-screen keyboard. The
+                            // visualViewport shrinks when the keyboard opens, so
+                            // scroll once it has settled; fall back to a plain
+                            // centered scroll where the API is unavailable.
+                            const vv = window.visualViewport;
+                            const bringUp = () => {
+                                try {
+                                    const rect = input.getBoundingClientRect();
+                                    const vh = vv ? vv.height : window.innerHeight;
+                                    if (rect.bottom > vh - 12) {
+                                        input.scrollIntoView({behavior: 'smooth', block: 'center'});
+                                    }
+                                } catch (e) {
+                                    input.scrollIntoView({behavior: 'smooth', block: 'center'});
+                                }
+                            };
+                            if (vv) {
+                                const onResize = () => { bringUp(); vv.removeEventListener('resize', onResize); };
+                                vv.addEventListener('resize', onResize);
+                                setTimeout(() => { vv.removeEventListener('resize', onResize); bringUp(); }, 500);
+                            } else {
+                                setTimeout(bringUp, 300);
+                            }
                         };
 '''
 
@@ -546,6 +638,10 @@ FRONTEND_JS_TEMPLATE = r"""
     const q_init = __JS_Q__;
     const lang_init = __JS_LANG__;
     let urls = __JS_URLS__;
+    // titles/favicons run parallel to urls (same citation order); favicons[i]
+    // is a proxy/data URL or '' (client draws a monogram fallback).
+    let titles = __JS_TITLES__;
+    let favicons = __JS_FAVICONS__;
     const b64_init = __B64_CONTEXT__;
     const tk_init = __TK__;
     const script_root = __SCRIPT_ROOT__;
@@ -572,6 +668,17 @@ FRONTEND_JS_TEMPLATE = r"""
     };
     let restored = false;
     let isStreaming = false;
+    // Stop button aborts the active stream; a Retry button re-runs the same
+    // call. userStopped distinguishes a deliberate stop from a timeout/error.
+    let activeController = null;
+    let userStopped = false;
+    let lastStreamArgs = null;
+    const FOLLOWUPS_MARKER = '<<FOLLOWUPS>>';
+
+    const stopBtn = document.getElementById('sxng-stop');
+    if (stopBtn) stopBtn.addEventListener('click', () => {
+        if (activeController) { userStopped = true; activeController.abort(); }
+    });
 
     // Set the instant a navigation is committed (e.g. switching result tabs),
     // before the browser tears down the in-flight fetch. Lets the stream's
@@ -638,12 +745,130 @@ FRONTEND_JS_TEMPLATE = r"""
     
     __CITATION_HELPER_JS__
 
+    // Source chips: favicon (via SearXNG's proxy) or a domain-initial monogram,
+    // plus the domain. Deduped by host and capped so the row stays scannable.
+    const sourcesEl = document.getElementById('sxng-sources');
+    const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return ''; } };
+    const monogramColor = (s) => {
+        let h = 0;
+        for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) & 0xffffff;
+        return 'hsl(' + (h % 360) + ', 42%, 45%)';
+    };
+    const makeMonogram = (host) => {
+        const m = document.createElement('span');
+        m.className = 'sxng-source-monogram';
+        m.style.background = monogramColor(host);
+        m.textContent = host.charAt(0) || '?';
+        return m;
+    };
+    function renderSources() {
+        if (!sourcesEl) return;
+        sourcesEl.textContent = '';
+        const seen = new Set();
+        let shown = 0;
+        for (let i = 0; i < urls.length && shown < 8; i++) {
+            const href = safeCitationUrl(urls[i]);
+            if (!href) continue;
+            const host = hostOf(href);
+            if (!host || seen.has(host)) continue;
+            seen.add(host);
+            shown++;
+            const chip = document.createElement('a');
+            chip.className = 'sxng-source-chip';
+            chip.href = href;
+            chip.target = '_blank';
+            chip.rel = 'noopener noreferrer';
+            chip.title = (titles[i] || host) + ' — ' + host;
+            const fav = favicons[i];
+            if (fav) {
+                const img = document.createElement('img');
+                img.className = 'sxng-source-favicon';
+                img.src = fav;
+                img.alt = '';
+                img.loading = 'lazy';
+                img.addEventListener('error', () => img.replaceWith(makeMonogram(host)));
+                chip.appendChild(img);
+            } else {
+                chip.appendChild(makeMonogram(host));
+            }
+            const dom = document.createElement('span');
+            dom.className = 'sxng-source-domain';
+            dom.textContent = host;
+            chip.appendChild(dom);
+            sourcesEl.appendChild(chip);
+        }
+    }
+    renderSources();
+
+    // Follow-up suggestion chips. The model appends a "<<FOLLOWUPS>>" block of
+    // 2-3 questions after the answer; split it off so it never renders as prose.
+    const followupsEl = document.getElementById('sxng-followups');
+    function splitFollowups(fullText) {
+        const cut = fullText.indexOf(FOLLOWUPS_MARKER);
+        if (cut === -1) return { answer: fullText, followups: [] };
+        const followups = fullText.slice(cut + FOLLOWUPS_MARKER.length)
+            .split('\n')
+            .map(l => l.replace(/^[\s>\-*\d.)]+/, '').trim())
+            .filter(l => l.length > 3 && l.length < 140)
+            .slice(0, 3);
+        return { answer: fullText.slice(0, cut), followups };
+    }
+    function renderFollowups(list) {
+        if (!followupsEl) return;
+        followupsEl.textContent = '';
+        if (!is_interactive || !list || !list.length) return;
+        list.forEach(q => {
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'sxng-followup-chip';
+            chip.textContent = q;
+            chip.addEventListener('click', () => {
+                if (typeof handleAction === 'function') handleAction(null, q);
+            });
+            followupsEl.appendChild(chip);
+        });
+    }
+
+    // Retry affordance for error states: re-runs the stream with the same args.
+    function appendRetry(target) {
+        if (!target) return;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'sxng-retry-btn';
+        btn.textContent = 'Retry';
+        btn.addEventListener('click', () => {
+            if (isStreaming) return;
+            data.querySelectorAll('.sxng-stream-error').forEach(el => el.remove());
+            if (!data.querySelector('.sxng-cursor')) {
+                const c = document.createElement('span');
+                c.className = 'sxng-cursor';
+                data.appendChild(c);
+            }
+            startStream.apply(null, lastStreamArgs || []);
+        });
+        target.appendChild(btn);
+    }
+
     __INTERACTIVE_JS_INIT__
 
     // Sidebar accordion mirroring SearXNG's "Response time" panel. All values
     // are DOM-built textContent; "~" marks char/4 estimates.
     function updateMetricsPanel(meta) {
         if (!show_metrics || !meta) return;
+
+        // Condensed inline line — the sidebar panel below is hidden on mobile,
+        // so surface the essentials (model + speed) inside the box instead.
+        const inlineEl = document.getElementById('sxng-metrics-inline');
+        if (inlineEl) {
+            const bits = [];
+            if (meta.model) bits.push(meta.model);
+            if (meta.ct && meta.dur > meta.ttft) {
+                bits.push((meta.ect ? '~' : '') + Math.round(meta.ct / ((meta.dur - meta.ttft) / 1000)) + ' tok/s');
+            }
+            if (meta.dur != null) bits.push((meta.dur / 1000).toFixed(1) + ' s');
+            inlineEl.textContent = bits.join(' · ');
+        }
+
         const sidebar = document.getElementById('sidebar');
         if (!sidebar) return;
         let table = document.getElementById('sxng-ai-metrics-table');
@@ -723,12 +948,16 @@ FRONTEND_JS_TEMPLATE = r"""
         }
         
         isStreaming = true;
+        userStopped = false;
+        lastStreamArgs = Array.prototype.slice.call(arguments);
+        if (typeof renderFollowups === 'function') renderFollowups([]);
         box.classList.add('sxng-streaming');
         announce('Generating AI summary');
         try {
             const ctx = auxContext || conversation.originalContext;
 
             const controller = new AbortController();
+            activeController = controller;
             let timeoutId = setTimeout(() => controller.abort(), 60000);
             const finalQ = __STREAM_Q__;
             
@@ -784,8 +1013,15 @@ FRONTEND_JS_TEMPLATE = r"""
             let stableEl = null, liveEl = null;
             let stableLen = 0;
             let renderQueued = false;
-            let lastRenderTime = 0;
+            let firstPaintDone = false;
             let renderTimer = null;
+            let rafHandle = null;
+            const raf = window.requestAnimationFrame
+                ? window.requestAnimationFrame.bind(window)
+                : (cb) => setTimeout(cb, 16);
+            const cancelRaf = window.cancelAnimationFrame
+                ? window.cancelAnimationFrame.bind(window)
+                : clearTimeout;
 
             const renderTick = () => {
                 renderQueued = false;
@@ -796,44 +1032,68 @@ FRONTEND_JS_TEMPLATE = r"""
                     cursor.before(stableEl);
                     cursor.before(liveEl);
                 }
-                const boundary = collectedResponse.lastIndexOf('\n\n');
+                // Never render the trailing followups block as prose. Once its
+                // marker (or even a partial prefix of it) appears, clamp the
+                // visible text so it can't flash on screen mid-stream.
+                let visible = collectedResponse;
+                const mIdx = visible.indexOf(FOLLOWUPS_MARKER);
+                if (mIdx !== -1) {
+                    visible = visible.slice(0, mIdx);
+                } else {
+                    const partial = visible.match(/\n*<{1,2}F?O?L?L?O?W?U?P?S?>?>?$/);
+                    if (partial && partial[0].length > 1) visible = visible.slice(0, partial.index);
+                }
+                const boundary = visible.lastIndexOf('\n\n');
                 if (boundary !== -1 && boundary + 2 > stableLen) {
                     const s = document.createElement('span');
                     s.className = 'sxng-chunk';
-                    s.appendChild(renderMarkdown(collectedResponse.substring(stableLen, boundary), urls));
+                    s.appendChild(renderMarkdown(visible.substring(stableLen, boundary), urls));
                     stableEl.appendChild(s);
                     stableLen = boundary + 2;
                 }
                 liveEl.textContent = '';
-                liveEl.appendChild(renderMarkdown(collectedResponse.substring(stableLen), urls));
+                liveEl.appendChild(renderMarkdown(visible.substring(stableLen), urls));
             };
 
-            // Throttle live re-renders to at most once every 750ms. Streaming
-            // deltas arrive far faster than that, and re-rendering on every
-            // frame makes the display flicker. A trailing timer guarantees the
-            // most recent buffered content renders once the interval elapses;
+            // Coalesce live re-renders to at most one per animation frame.
+            // Streaming deltas arrive far faster than the display can repaint,
+            // so a requestAnimationFrame gate collapses a burst of deltas into a
+            // single render (~60fps ceiling) — smooth on desktop and far lighter
+            // on mobile than rendering per delta. The first paint waits a short
+            // warm-up so a phrase accumulates instead of flashing a lone letter;
             // the final full markdown re-render still runs when the stream ends.
             const scheduleRender = () => {
                 if (renderQueued) return;
                 renderQueued = true;
-                const elapsed = Date.now() - lastRenderTime;
-                // First paint: wait a short warm-up so a phrase accumulates
-                // instead of flashing a lone first letter. Afterwards, throttle
-                // at 750ms.
-                const delay = lastRenderTime === 0
-                    ? 300
-                    : Math.max(0, 750 - elapsed);
-                renderTimer = setTimeout(() => {
-                    renderTimer = null;
-                    lastRenderTime = Date.now();
-                    renderTick(); // clears renderQueued
-                }, delay);
+                if (!firstPaintDone) {
+                    // First paint: brief warm-up so a phrase accumulates.
+                    renderTimer = setTimeout(() => {
+                        renderTimer = null;
+                        firstPaintDone = true;
+                        renderTick(); // clears renderQueued
+                    }, 300);
+                } else {
+                    rafHandle = raf(() => {
+                        rafHandle = null;
+                        renderTick(); // clears renderQueued
+                    });
+                }
             };
 
             let streamBuffer = '';
             let metaBuf = null;
             while (true) {
-                const {done, value} = await reader.read();
+                let readResult;
+                try {
+                    readResult = await reader.read();
+                } catch (readErr) {
+                    // A deliberate Stop aborts the reader: break and finalize the
+                    // partial answer below. Any other read error is a real
+                    // failure — re-throw to the outer catch.
+                    if (userStopped) break;
+                    throw readErr;
+                }
+                const {done, value} = readResult;
                 if (done) break;
 
                 clearTimeout(timeoutId);
@@ -928,9 +1188,11 @@ FRONTEND_JS_TEMPLATE = r"""
                 }
             }
 
-            // Stream finished: drop any pending throttled render — the final
-            // full markdown re-render below supersedes it.
-            if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; renderQueued = false; }
+            // Stream finished: drop any pending throttled/frame render — the
+            // final full markdown re-render below supersedes it.
+            if (renderTimer) { clearTimeout(renderTimer); renderTimer = null; }
+            if (rafHandle) { cancelRaf(rafHandle); rafHandle = null; }
+            renderQueued = false;
 
             if (metaBuf !== null) {
                 try { updateMetricsPanel(JSON.parse(metaBuf)); } catch(e) {}
@@ -941,17 +1203,19 @@ FRONTEND_JS_TEMPLATE = r"""
             if (!started && !collectedResponse.trim()) {
                 const cursor = data.querySelector('.sxng-cursor');
                 if (cursor) cursor.remove();
-                
+
                 const errSpan = document.createElement('span');
+                errSpan.className = 'sxng-stream-error';
                 if (thoughtDiv && thoughtDiv.textContent.trim().length > 0) {
                     console.warn('[AI Answers] Reasoning finished without an answer; consider raising token limits.');
                     errSpan.style.color = 'var(--color-warning, #ebcb8b)';
-                    errSpan.textContent = 'The model stopped before finishing an answer. Try regenerating.';
+                    errSpan.textContent = 'The model stopped before finishing an answer. ';
                 } else {
                     console.error('[AI Answers] Empty response; check API configuration and server logs.');
                     errSpan.style.color = 'var(--color-error, #bf616a)';
-                    errSpan.textContent = 'No response from the AI provider. Try again.';
+                    errSpan.textContent = 'No response from the AI provider. ';
                 }
+                appendRetry(errSpan);
                 data.appendChild(errSpan);
                 announce('AI summary failed');
                 revealFooter();
@@ -959,7 +1223,8 @@ FRONTEND_JS_TEMPLATE = r"""
                 return;
             }
 
-            const finalText = collectedResponse.trim();
+            const split = splitFollowups(collectedResponse);
+            const finalText = split.answer.trim();
             if (finalText) {
                 // Replace this turn's plain streamed chunks with the markdown
                 // render, keeping the reasoning <details> box if present.
@@ -970,12 +1235,14 @@ FRONTEND_JS_TEMPLATE = r"""
                 turnWrap.appendChild(renderMarkdown(finalText, urls));
             }
 
+            renderFollowups(split.followups);
+
             __INTERACTIVE_JS_COMPLETE__
 
-            announce('AI summary ready');
+            announce(userStopped ? 'AI summary stopped' : 'AI summary ready');
 
-            if (collectedResponse) {
-                conversation.turns.push({role: 'assistant', content: collectedResponse.trim(), ts: Date.now()});
+            if (finalText) {
+                conversation.turns.push({role: 'assistant', content: finalText, ts: Date.now()});
             }
             
             // Save state if this was an initial generation or a regeneration
@@ -993,13 +1260,15 @@ FRONTEND_JS_TEMPLATE = r"""
             }
             console.error('[AI Answers] Fatal stream exception:', e);
             const errSpan = document.createElement('span');
+            errSpan.className = 'sxng-stream-error';
             errSpan.style.cssText = 'color: var(--color-error, #bf616a); font-weight: bold; display: block; margin-top: 0.5rem;';
 
             if (e.name === 'AbortError') {
-                errSpan.textContent = "The AI provider took too long to respond. Try again.";
+                errSpan.textContent = "The AI provider took too long to respond. ";
             } else {
-                errSpan.textContent = "Something went wrong while generating the summary. Try again.";
+                errSpan.textContent = "Something went wrong while generating the summary. ";
             }
+            appendRetry(errSpan);
 
             if (data) {
                 const cursor = data.querySelector('.sxng-cursor');
@@ -1011,6 +1280,7 @@ FRONTEND_JS_TEMPLATE = r"""
             restoreNativeAnswers();
         } finally {
             isStreaming = false;
+            activeController = null;
             box.classList.remove('sxng-streaming');
             updateShowMore();
         }
@@ -1199,7 +1469,24 @@ class SXNGPlugin(Plugin):
             logger.warning(f"{PLUGIN_NAME}: server.secret_key is empty or the SearXNG default "
                            "('ultrasecretkey'); AI stream tokens are forgeable. Set a strong secret_key.")
         self.secret = hashlib.sha256(f"ai_answers_{server_secret}".encode()).hexdigest()
-        
+
+        # Source-chip favicons reuse SearXNG's own favicon proxy (correct HMAC +
+        # caching, no third-party calls). Only enabled when the admin configured
+        # a resolver in settings.yml (search.favicon_resolver); otherwise the
+        # client falls back to a domain-initial monogram chip.
+        self._favicon_url_fn = None
+        if settings.get('search', {}).get('favicon_resolver'):
+            try:
+                from searx.favicons import favicon_url as _favicon_url_fn
+                self._favicon_url_fn = _favicon_url_fn
+            except Exception:
+                try:
+                    from searx.favicons.proxy import favicon_url as _favicon_url_fn
+                    self._favicon_url_fn = _favicon_url_fn
+                except Exception:
+                    logger.info(f"{PLUGIN_NAME}: favicon_resolver is set but searx.favicons "
+                                "is unavailable; source chips will use monogram fallback.")
+
         self.system_prompt = os.getenv('LLM_SYSTEM_PROMPT', '').strip()
 
         if not self.api_key:
@@ -1322,10 +1609,13 @@ class SXNGPlugin(Plugin):
                 results, infoboxes, answers = self._parse_aux_results(raw_results, raw_infoboxes, raw_answers)
                 
                 context_str, new_urls = self._assemble_context(results, infoboxes, answers, offset)
+                _, new_titles, new_favicons = self._source_meta(results)
 
                 return jsonify({
                     'context': context_str,
                     'new_urls': new_urls,
+                    'new_titles': new_titles,
+                    'new_favicons': new_favicons,
                     'results': results, 
                     'infoboxes': infoboxes,
                     'answers': answers,
@@ -1402,6 +1692,14 @@ class SXNGPlugin(Plugin):
             instructions = [task] + CORE_RULES + [grounding]
             if history_rule:
                 instructions.append(history_rule)
+            if self.interactive:
+                # Trailing machine-readable block the client splits off into
+                # clickable follow-up chips; it must never appear in the prose.
+                instructions.append(
+                    "FOLLOW-UP SUGGESTIONS: after finishing the answer, output one line containing exactly "
+                    "<<FOLLOWUPS>> and then 2-3 short, natural follow-up questions the reader might ask next, "
+                    "one per line, no numbering or bullets. This block must come last, after everything else."
+                )
 
             numbered_instructions = "\n".join(f"{i+1}. {r}" for i, r in enumerate(instructions))
             system_message = f"""{SYSTEM}
@@ -1687,6 +1985,30 @@ class SXNGPlugin(Plugin):
             })
         return True
 
+    def _favicon_url(self, page_url: str) -> str:
+        """Favicon proxy URL for a source, or '' when the client should draw a
+        monogram fallback. Never raises and never blocks on a network fetch —
+        SearXNG returns a cached data URL or a deferred proxy URL."""
+        if not self._favicon_url_fn or not page_url:
+            return ''
+        try:
+            authority = urlparse(page_url).hostname or ''
+            if not authority:
+                return ''
+            return self._favicon_url_fn(authority) or ''
+        except Exception:
+            return ''
+
+    def _source_meta(self, clean_results):
+        """Parallel (urls, titles, favicons) arrays for the source-chip row and
+        citation previews, in the same citation order as _assemble_context."""
+        limit = self.context_deep_count + self.context_shallow_count
+        subset = clean_results[:limit]
+        urls = [r.get('url', '') for r in subset]
+        titles = [(r.get('title', '') or '').replace('\n', ' ').strip()[:120] for r in subset]
+        favicons = [self._favicon_url(u) for u in urls]
+        return urls, titles, favicons
+
     def _assemble_context(self, clean_results, infoboxes, answers, offset=0) -> tuple[str, list]:
         """Builds context string from normalized search data. Returns (context_str, urls)."""
         context_parts = []
@@ -1780,13 +2102,14 @@ class SXNGPlugin(Plugin):
             safe_json = lambda x: json.dumps(x).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
             
             b64_context = base64.b64encode(context_str.encode('utf-8')).decode('utf-8')
-            total_context_count = self.context_deep_count + self.context_shallow_count
-            
-            raw_urls = [r.get('url', '') for r in clean_results[:total_context_count]]
-            
+
+            raw_urls, raw_titles, raw_favicons = self._source_meta(clean_results)
+
             js_q = safe_json(q_clean)
             js_lang = safe_json(lang)
             js_urls = safe_json(raw_urls)
+            js_titles = safe_json(raw_titles)
+            js_favicons = safe_json(raw_favicons)
             js_b64_context = safe_json(b64_context)
             js_tk = safe_json(tk)
             js_script_root = safe_json((request.script_root if request else '').rstrip('/'))
@@ -1817,6 +2140,8 @@ class SXNGPlugin(Plugin):
                 .replace("__INTERACTIVE_JS_COMPLETE__", interactive_js_complete) \
                 .replace("__JS_LANG__", js_lang) \
                 .replace("__JS_URLS__", js_urls) \
+                .replace("__JS_TITLES__", js_titles) \
+                .replace("__JS_FAVICONS__", js_favicons) \
                 .replace("__B64_CONTEXT__", js_b64_context) \
                 .replace("__JS_Q__", js_q)
 
@@ -1962,6 +2287,150 @@ class SXNGPlugin(Plugin):
                         @media (pointer: coarse) {{
                             .sxng-show-more-btn {{ padding: 0.55rem 1rem; }}
                         }}
+                        .sxng-sources {{
+                            display: flex;
+                            flex-wrap: wrap;
+                            gap: 0.4rem;
+                            margin: 0.7rem 0 0;
+                        }}
+                        .sxng-sources:empty {{ display: none; }}
+                        .sxng-source-chip {{
+                            display: inline-flex;
+                            align-items: center;
+                            gap: 0.35rem;
+                            max-width: 220px;
+                            padding: 0.2rem 0.55rem;
+                            border: 1px solid var(--color-base-border, rgba(128,128,128,0.28));
+                            border-radius: 999px;
+                            background: var(--color-base-background-hover, rgba(128,128,128,0.06));
+                            color: var(--color-base-font, inherit);
+                            text-decoration: none;
+                            font-size: 0.8rem;
+                            line-height: 1.25;
+                        }}
+                        .sxng-source-chip:hover {{
+                            border-color: var(--color-result-link, #5e81ac);
+                            color: var(--color-result-link, #5e81ac);
+                        }}
+                        .sxng-source-domain {{
+                            white-space: nowrap;
+                            overflow: hidden;
+                            text-overflow: ellipsis;
+                        }}
+                        .sxng-source-favicon {{
+                            width: 16px; height: 16px;
+                            border-radius: 3px;
+                            flex-shrink: 0;
+                            object-fit: contain;
+                        }}
+                        .sxng-source-monogram {{
+                            width: 16px; height: 16px;
+                            border-radius: 3px;
+                            flex-shrink: 0;
+                            display: inline-flex;
+                            align-items: center;
+                            justify-content: center;
+                            font-size: 10px;
+                            font-weight: 700;
+                            color: #fff;
+                            text-transform: uppercase;
+                        }}
+                        .sxng-cite {{ cursor: pointer; }}
+                        .sxng-cite-preview {{
+                            position: absolute;
+                            z-index: 2147483000;
+                            display: none;
+                            max-width: 280px;
+                            padding: 0.5rem 0.65rem;
+                            border-radius: 8px;
+                            background: var(--color-base-background, #fff);
+                            color: var(--color-base-font, #333);
+                            border: 1px solid var(--color-base-border, rgba(128,128,128,0.3));
+                            box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+                            font-size: 0.8rem;
+                            line-height: 1.35;
+                            pointer-events: none;
+                        }}
+                        .sxng-cite-preview-title {{ font-weight: 600; margin-bottom: 0.15rem; }}
+                        .sxng-cite-preview-host {{ opacity: 0.7; font-size: 0.75rem; word-break: break-all; }}
+                        .sxng-stop {{
+                            display: none;
+                            align-items: center;
+                            gap: 0.3rem;
+                            margin-left: 0.5rem;
+                            padding: 0.15rem 0.55rem;
+                            border: 1px solid var(--color-base-border, rgba(128,128,128,0.35));
+                            border-radius: 999px;
+                            background: transparent;
+                            color: var(--color-base-font, inherit);
+                            font-size: 0.75rem;
+                            font-weight: 500;
+                            cursor: pointer;
+                        }}
+                        .sxng-stop svg {{ width: 12px; height: 12px; fill: currentColor; }}
+                        .sxng-stop:hover {{ border-color: var(--color-error, #bf616a); color: var(--color-error, #bf616a); }}
+                        #sxng-stream-box.sxng-streaming .sxng-stop {{ display: inline-flex; }}
+                        .sxng-followups {{
+                            display: flex;
+                            flex-wrap: wrap;
+                            gap: 0.4rem;
+                            margin: 0.7rem 0 0;
+                        }}
+                        .sxng-followups:empty {{ display: none; }}
+                        .sxng-followup-chip {{
+                            text-align: left;
+                            padding: 0.35rem 0.7rem;
+                            border: 1px solid var(--color-result-link, #5e81ac);
+                            border-radius: 999px;
+                            background: transparent;
+                            color: var(--color-result-link, #5e81ac);
+                            font-size: 0.82rem;
+                            line-height: 1.25;
+                            cursor: pointer;
+                            transition: background 0.15s ease;
+                        }}
+                        .sxng-followup-chip::before {{ content: "+ "; opacity: 0.7; }}
+                        .sxng-followup-chip:hover {{ background: var(--color-base-background-hover, rgba(94,129,172,0.12)); }}
+                        .sxng-retry-btn {{
+                            margin-left: 0.5rem;
+                            padding: 0.15rem 0.7rem;
+                            border: 1px solid var(--color-result-link, #5e81ac);
+                            border-radius: 6px;
+                            background: transparent;
+                            color: var(--color-result-link, #5e81ac);
+                            font-size: 0.82rem;
+                            cursor: pointer;
+                        }}
+                        .sxng-retry-btn:hover {{ background: var(--color-base-background-hover, rgba(0,0,0,0.05)); }}
+                        @media (pointer: coarse) {{
+                            .sxng-stop {{ padding: 0.4rem 0.8rem; }}
+                            .sxng-followup-chip, .sxng-retry-btn {{ padding: 0.5rem 0.9rem; }}
+                        }}
+                        /* Condensed metrics line: hidden on desktop (the sidebar
+                           panel covers it), shown on mobile where the sidebar is not. */
+                        .sxng-metrics-inline {{ display: none; }}
+                        .sxng-metrics-inline:empty {{ display: none !important; }}
+                        #sxng-stream-data pre, #sxng-stream-data code {{ overflow-x: auto; max-width: 100%; }}
+                        @media (max-width: 768px) {{
+                            /* Keep source/followup rows on one swipeable line so
+                               they never widen the page. */
+                            .sxng-sources, .sxng-followups {{
+                                flex-wrap: nowrap;
+                                overflow-x: auto;
+                                -webkit-overflow-scrolling: touch;
+                                scrollbar-width: none;
+                            }}
+                            .sxng-sources::-webkit-scrollbar, .sxng-followups::-webkit-scrollbar {{ display: none; }}
+                            .sxng-source-chip, .sxng-followup-chip {{ flex-shrink: 0; }}
+                            /* Shorter collapsed preview so it doesn't dominate a phone screen. */
+                            #sxng-answer-wrap.sxng-collapsed {{ height: calc(6 * 1.5em); }}
+                            .sxng-metrics-inline {{
+                                display: block;
+                                margin-top: 0.6rem;
+                                font-size: 0.72rem;
+                                opacity: 0.6;
+                            }}
+                        }}
                         {interactive_css}
                     </style>
                     <div class="sxng-ai-header">
@@ -1975,12 +2444,19 @@ class SXNGPlugin(Plugin):
                         </svg>
                         <span>AI Summary</span>
                         <span class="sxng-ai-note">May contain mistakes</span>
+                        <button id="sxng-stop" class="sxng-stop" type="button" title="Stop generating" aria-label="Stop generating">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+                            <span>Stop</span>
+                        </button>
                     </div>
                     <span id="sxng-live-status" role="status" class="sxng-visually-hidden"></span>
                     <div id="sxng-answer-wrap" class="{collapsed_class}">
                         <p id="sxng-stream-data" style="white-space: pre-wrap; margin:0;"><span class="sxng-cursor"></span></p>
                     </div>
                     {show_more_html}
+                    <div id="sxng-sources" class="sxng-sources"></div>
+                    <div id="sxng-followups" class="sxng-followups"></div>
+                    <div id="sxng-metrics-inline" class="sxng-metrics-inline"></div>
                     {interactive_html}
                     <script>
                     {js_code}

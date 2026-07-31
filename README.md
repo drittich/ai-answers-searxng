@@ -4,17 +4,21 @@
 
 A SearXNG plugin that generates AI answers using search results as RAG context. Supports 8+ LLM providers.
 
-> This is a fork of [cra88y/ai-answers-searxng](https://github.com/cra88y/ai-answers-searxng) tuned for a DeepSeek-via-OpenRouter deployment, with additional features: reasoning-model token budgets, markdown rendering, a collapsed-by-default answer box with zero layout shift, a real system role, extra request-body passthrough, and a pytest suite.
+> This is a fork of [cra88y/ai-answers-searxng](https://github.com/cra88y/ai-answers-searxng) tuned for a DeepSeek-via-OpenRouter deployment, with additional features: reasoning-model token budgets, markdown rendering, a collapsed-by-default answer box with zero layout shift, a source-chip row with favicons and citation hover previews, suggested follow-up chips, stop/retry controls, a real system role, extra request-body passthrough, and a pytest suite.
 
 Features:
-- token-by-token UI streaming
+- token-by-token UI streaming (coalesced to one render per animation frame — smooth on desktop, light on mobile)
 - markdown rendering (bold, italics, code, lists, headers) with clickable inline citations
+- source chips (favicon + domain) below the answer, plus a hover/tap preview card on each citation showing the source title and domain
+- suggested follow-up question chips ("People also ask") that continue the conversation in one tap
+- a Stop button while generating (keeps the partial answer) and a Retry button on errors
 - collapsed preview with a "Show more" / "Show less" toggle and a fade-out edge — the results list never shifts while the answer streams
 - reasoning-model support: streamed thinking shown in a collapsible "Thought Process" box, with a separate reasoning token budget
 - interactive mode to continue summary, ask follow ups, copy, or regenerate
 - simple response mode with no extras
 - internally called low-latency RAG for follow ups (bypasses http loopback)
 - stateless conversation persistence/sharability via URL
+- mobile-tuned: swipeable source/follow-up rows, shorter collapsed preview, condensed inline metrics, and a keyboard-aware follow-up input
 - provider detection based on URL
 - per-user opt-in/opt-out via the SearXNG Preferences page
 
@@ -140,6 +144,10 @@ Configure via the environment variables:
 - `LLM_OLLAMA_UNLOAD_AFTER`: Unload Ollama model after each response. Default `false`.
 - `LLM_URL_STATE`: Save/restore the conversation in the URL `#ai=` fragment so answers survive reloads and links are shareable. Set to `false` to keep conversations out of URLs and browser history. Default `true`.
 
+> **Source favicons (optional, not an `LLM_` variable).** The source chips below each answer show site favicons only when SearXNG's own favicon proxy is enabled — set `search.favicon_resolver` in `settings.yml` (e.g. `duckduckgo`, `google`, `allesedv`, or `yandex`). Favicon URLs are built server-side through that proxy (correct HMAC + caching, so no third-party favicon service is contacted directly by the browser). When the resolver is unset, chips fall back to a colored domain-initial monogram — no configuration required.
+
+> **Follow-up chips.** In interactive mode the model is asked to append a short machine-readable block of 2–3 suggested follow-up questions, which the client splits off (it never appears in the answer text) and renders as clickable chips. If a particular model doesn't emit them reliably, the chips simply don't show — the answer is unaffected.
+
 ## How It Works
 1. user initial search
 2. results return server side
@@ -148,6 +156,7 @@ Configure via the environment variables:
 5. inject the ui/logic "shell" into standard results answer object
 6. client side script calls custom endpoint with signed token
 7. LLM response streams back token by token; thinking (`reasoning`/`reasoning_content` deltas or `<think>` tags) renders into a collapsible box, and the answer renders as markdown with linked citations live while it streams (completed blocks render once; only the trailing partial block re-renders per frame)
+8. on completion the source chips fill in, and (in interactive mode) the trailing follow-up block is split off into suggestion chips; a Stop button can end generation early and errors offer a Retry
 
 ## Security notes
 
