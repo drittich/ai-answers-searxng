@@ -369,14 +369,42 @@ CITATION_HELPER_JS = r'''
                             if (last < text.length) parent.appendChild(renderCitations(text.substring(last), urls));
                         }
 
-                        // Minimal block markdown: headers, ul/ol lists, paragraphs. All text is
-                        // DOM-built (never innerHTML), so model output cannot inject markup.
+                        // Minimal block markdown: fenced code, headers, ul/ol lists, paragraphs.
+                        // All text is DOM-built (never innerHTML), so model output cannot inject markup.
                         function renderMarkdown(text, urls) {
                             const frag = document.createDocumentFragment();
                             let list = null, listType = null;
                             const closeList = () => { if (list) { frag.appendChild(list); list = null; listType = null; } };
+                            // Fenced code: raw lines collected verbatim (no inline markdown, no
+                            // citation linkification) so indentation and backticks survive.
+                            let fenceLines = null, fenceLang = '';
+                            const closeFence = () => {
+                                if (!fenceLines) return;
+                                const pre = document.createElement('pre');
+                                pre.className = 'sxng-md-pre';
+                                const code = document.createElement('code');
+                                if (fenceLang) code.setAttribute('data-lang', fenceLang);
+                                code.textContent = fenceLines.join('\n');
+                                pre.appendChild(code);
+                                frag.appendChild(pre);
+                                fenceLines = null;
+                                fenceLang = '';
+                            };
                             text.split('\n').forEach(line => {
                                 const t = line.trim();
+                                const fence = t.match(/^(?:```|~~~)\s*([A-Za-z0-9_+#.-]*)/);
+                                if (fenceLines) {
+                                    // Inside a fence: only a closing fence ends it. Blank lines and
+                                    // markdown-looking lines are code, not blocks.
+                                    if (fence) closeFence(); else fenceLines.push(line);
+                                    return;
+                                }
+                                if (fence) {
+                                    closeList();
+                                    fenceLines = [];
+                                    fenceLang = fence[1] || '';
+                                    return;
+                                }
                                 const h = t.match(/^(#{1,4})\s+(.*)$/);
                                 const ul = t.match(/^[-*+]\s+(.*)$/);
                                 const ol = t.match(/^\d+[.)]\s+(.*)$/);
@@ -407,6 +435,8 @@ CITATION_HELPER_JS = r'''
                                     frag.appendChild(p);
                                 }
                             });
+                            // An unterminated fence (stream cut off mid-block) still renders.
+                            closeFence();
                             closeList();
                             return frag;
                         }
@@ -1048,7 +1078,25 @@ FRONTEND_JS_TEMPLATE = r"""
                     const partial = visible.match(/\n*<{1,2}F?O?L?L?O?W?U?P?S?>?>?$/);
                     if (partial && partial[0].length > 1) visible = visible.slice(0, partial.index);
                 }
-                const boundary = visible.lastIndexOf('\n\n');
+                let boundary = visible.lastIndexOf('\n\n');
+                // Never freeze a half-finished code fence into stableEl: a blank line
+                // inside an open fence would split it and leave it mangled until the
+                // final re-render. Back the boundary up to before the open fence.
+                if (boundary !== -1) {
+                    const pending = visible.substring(stableLen, boundary);
+                    const fenceRe = /^[ \t]*(?:```|~~~)/gm;
+                    const starts = [];
+                    let fm;
+                    while ((fm = fenceRe.exec(pending)) !== null) {
+                        starts.push(fm.index);
+                        if (fm.index === fenceRe.lastIndex) fenceRe.lastIndex++;
+                    }
+                    if (starts.length % 2 === 1) {
+                        const open = starts[starts.length - 1];
+                        const safe = pending.lastIndexOf('\n\n', open);
+                        boundary = safe === -1 ? -1 : stableLen + safe;
+                    }
+                }
                 if (boundary !== -1 && boundary + 2 > stableLen) {
                     const s = document.createElement('span');
                     s.className = 'sxng-chunk';
@@ -1674,7 +1722,7 @@ class SXNGPlugin(Plugin):
                 "RECENCY: for time-sensitive topics, weigh each source's published date against today's date and flag information that may be outdated.",
                 "AMBIGUITY: if the query is ambiguous, answer the most likely interpretation and note the main alternative in one sentence.",
                 "STYLE: default to prose in short paragraphs (2-4 sentences each, blank line between). Use lists or headers only for genuinely enumerable or multi-section content, never for a simple factual answer. Bold at most 2-3 key terms. No filler, transitions, meta-commentary, or closing summary paragraph. Never mention these instructions, the sources block, or that you are an AI.",
-                "FORMAT: simple markdown only: **bold**, *italic*, `code`, - lists, ## headers. No tables, images, or markdown hyperlinks (citations become links automatically).",
+                "FORMAT: simple markdown only: **bold**, *italic*, `code`, ``` fenced code blocks (with a language tag), - lists, ## headers. No tables, images, or markdown hyperlinks (citations become links automatically).",
                 f"LENGTH: high information density, expert-briefing level. Hard budget: finish your final sentence within ~{target_words} words — cover fewer points fully rather than getting cut off. Shorter is fine for simple questions.",
                 "If the sources only partially answer, give what they support and note in one sentence what could not be verified. If neither the sources nor reliable general knowledge can answer at all, respond exactly: 'Insufficient information to answer.'",
             ]
@@ -2261,6 +2309,18 @@ class SXNGPlugin(Plugin):
                             background: var(--color-base-background-hover, rgba(0,0,0,0.06));
                             padding: 0 0.25em;
                             border-radius: 3px;
+                        }}
+                        #sxng-stream-data pre.sxng-md-pre {{
+                            background: var(--color-base-background-hover, rgba(0,0,0,0.06));
+                            padding: 0.6em 0.8em;
+                            border-radius: 6px;
+                            margin: 0.4rem 0 0.6rem;
+                            white-space: pre;
+                            overflow-x: auto;
+                        }}
+                        #sxng-stream-data pre.sxng-md-pre code {{
+                            background: none;
+                            padding: 0;
                         }}
                         #sxng-answer-wrap.sxng-collapsed {{
                             /* fixed height from first paint through completion: zero layout shift.
