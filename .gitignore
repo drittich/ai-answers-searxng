@@ -7,3 +7,4 @@ venv/
 .vscode/
 .agent/
 .playwright-mcp/
+frontend_test.js

@@ -134,6 +134,12 @@ def test_collapsed_flag(make_plugin):
     assert make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_COLLAPSED='false').collapsed is False
 
 
+def test_session_cache_flag(make_plugin):
+    assert make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k').session_cache is True
+    assert make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k',
+                       LLM_SESSION_CACHE='false').session_cache is False
+
+
 def test_bare_host_url_defaults_to_https(make_plugin):
     p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_URL='myhost.lan:8080/v1/chat/completions')
     assert p.endpoint_url.startswith('https://')
@@ -605,6 +611,24 @@ def test_url_state_toggle(make_plugin):
     search = MockSearch()
     p.post_search(None, search)
     assert 'const url_state = false' in list(search.result_container.answers)[0]
+
+
+def test_session_cache_toggle_and_key(make_plugin):
+    # Default on: cache flag true and the key mixes in the category set so the
+    # same query on a different tab is a distinct cache entry.
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    search = MockSearch(categories=['general'])
+    p.post_search(None, search)
+    html = list(search.result_container.answers)[0]
+    assert 'const session_cache = true' in html
+    assert 'const categories_init = "general"' in html
+    assert 'sessionStorage.setItem(cacheKey' in html
+
+    # Off via env.
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_SESSION_CACHE='false')
+    search = MockSearch()
+    p.post_search(None, search)
+    assert 'const session_cache = false' in list(search.result_container.answers)[0]
 
 
 def test_citation_url_allowlist_present(make_plugin):

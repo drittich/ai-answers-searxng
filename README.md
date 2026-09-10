@@ -150,6 +150,7 @@ Configure via the environment variables:
 - `LLM_QUESTION_MARK_REQUIRED`: Only trigger AI answers when the query contains `?`. Default `false`.
 - `LLM_OLLAMA_UNLOAD_AFTER`: Unload Ollama model after each response. Default `false`.
 - `LLM_URL_STATE`: Save/restore the conversation in the URL `#ai=` fragment so answers survive reloads and links are shareable. Set to `false` to keep conversations out of URLs and browser history. Default `true`.
+- `LLM_SESSION_CACHE`: Cache the completed answer in the browser's `sessionStorage` (keyed by query + language + result categories) so switching result tabs (e.g. General → Images → General) and returning restores the answer instead of paying to regenerate it. The cache lives only for the browser session and is cleared when the tab closes. Set to `false` to always regenerate. Default `true`.
 
 > **Source favicons (optional, not an `LLM_` variable).** The source chips below each answer show site favicons only when SearXNG's own favicon proxy is enabled — set `search.favicon_resolver` in `settings.yml` (e.g. `duckduckgo`, `google`, `allesedv`, or `yandex`). Favicon URLs are built server-side through that proxy (correct HMAC + caching, so no third-party favicon service is contacted directly by the browser). When the resolver is unset, chips fall back to a colored domain-initial monogram — no configuration required.
 

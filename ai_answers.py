@@ -500,37 +500,9 @@ INTERACTIVE_JS = r'''
                                 const json = new TextDecoder().decode(uint8);
                                 const state = JSON.parse(json);
                                 if (state.t && state.t.length > 0) {
-                                    // Restore URLs for citation indexing (fragment is
-                                    // attacker-controllable: sanitize every URL)
-                                    if (state.u && Array.isArray(state.u)) {
-                                        urls = state.u.map(safeCitationUrl);
-                                    }
-                                    
-                                    conversation.turns = state.t.map(t => ({
-                                        role: t.r === 'u' ? 'user' : 'assistant',
-                                        content: t.c.trim(),
-                                        ts: 0
-                                    }));
-                                    
-                                    data.innerHTML = '';
-                                    conversation.turns.forEach((turn, i) => {
-                                        if (turn.role === 'user') {
-                                            if (turn.content !== conversation.originalQuery) {
-                                                const u = document.createElement('span');
-                                                u.className = 'sxng-user-msg';
-                                                u.textContent = turn.content;
-                                                data.appendChild(u);
-                                                const clr = document.createElement('div');
-                                                clr.style.clear = 'both';
-                                                data.appendChild(clr);
-                                            }
-                                        } else {
-                                            data.appendChild(renderMarkdown(turn.content, urls));
-                                        }
-                                    });
-                                    if(footer && is_interactive) footer.classList.add('sxng-ready');
-                                    updateShowMore();
-                                    if (typeof renderSources === 'function') renderSources();
+                                    // Fragment is attacker-controllable; renderConversation
+                                    // sanitizes every restored URL via safeCitationUrl.
+                                    renderConversation(state);
                                     restored = true;
                                 }
                             } catch(e) { console.warn('Restore failed', e); }
@@ -687,6 +659,8 @@ FRONTEND_JS_TEMPLATE = r"""
     };
     const is_collapsed = __IS_COLLAPSED__;
     const url_state = __URL_STATE__;
+    const session_cache = __SESSION_CACHE__;
+    const categories_init = __JS_CATEGORIES__;
     const show_metrics = __SHOW_METRICS__;
     const show_followups = __SHOW_FOLLOWUPS__;
     const box = document.getElementById('sxng-stream-box');
@@ -882,6 +856,106 @@ FRONTEND_JS_TEMPLATE = r"""
             startStream.apply(null, lastStreamArgs || []);
         });
         target.appendChild(btn);
+    }
+
+    // Rebuild the panel from a saved state ({t:turns, u:urls, ti:titles,
+    // f:favicons}). Shared by the URL-fragment restore and the sessionStorage
+    // cache restore. Sources block (fragment) is attacker-controllable, so URLs
+    // pass through safeCitationUrl; titles/favicons are only ever present in the
+    // same-origin sessionStorage payload we wrote ourselves.
+    function renderConversation(state) {
+        if (state.u && Array.isArray(state.u)) urls = state.u.map(safeCitationUrl);
+        if (state.ti && Array.isArray(state.ti)) titles = state.ti;
+        if (state.f && Array.isArray(state.f)) favicons = state.f;
+        conversation.turns = state.t.map(t => ({
+            role: t.r === 'u' ? 'user' : 'assistant',
+            content: t.c.trim(),
+            ts: 0
+        }));
+        data.innerHTML = '';
+        conversation.turns.forEach((turn) => {
+            if (turn.role === 'user') {
+                if (turn.content !== conversation.originalQuery) {
+                    const u = document.createElement('span');
+                    u.className = 'sxng-user-msg';
+                    u.textContent = turn.content;
+                    data.appendChild(u);
+                    const clr = document.createElement('div');
+                    clr.style.clear = 'both';
+                    data.appendChild(clr);
+                }
+            } else {
+                data.appendChild(renderMarkdown(turn.content, urls));
+            }
+        });
+        revealFooter();
+        updateShowMore();
+        if (typeof renderSources === 'function') renderSources();
+    }
+
+    // Session cache: survives result-tab navigation (a full page load, which
+    // the #ai= fragment does not carry) so the same search isn't regenerated.
+    // Keyed by query+lang+categories; sibling searches (e.g. the same query on
+    // a different tab) never collide.
+    const CACHE_PREFIX = 'sxng-ai:';
+    const CACHE_MAX = 20;
+    const cacheKey = CACHE_PREFIX + [q_init, lang_init, categories_init].join('\x1f');
+    function saveCache() {
+        if (!session_cache) return;
+        let payload;
+        try {
+            payload = JSON.stringify({
+                v: 1,
+                ts: Date.now(),
+                t: conversation.turns.map(t => ({
+                    r: t.role === 'user' ? 'u' : 'a',
+                    c: t.content.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim()
+                })),
+                u: urls,
+                ti: titles,
+                f: favicons
+            });
+        } catch (e) { return; }
+        const write = () => sessionStorage.setItem(cacheKey, payload);
+        try {
+            // Light LRU: cap our own entries so a long browsing session can't
+            // fill the quota. Never touches other apps' keys.
+            const mine = [];
+            for (let i = 0; i < sessionStorage.length; i++) {
+                const k = sessionStorage.key(i);
+                if (k && k.indexOf(CACHE_PREFIX) === 0 && k !== cacheKey) mine.push(k);
+            }
+            if (mine.length + 1 > CACHE_MAX) {
+                mine.map(k => {
+                    let ts = 0;
+                    try { ts = (JSON.parse(sessionStorage.getItem(k)) || {}).ts || 0; } catch (e) {}
+                    return [k, ts];
+                }).sort((a, b) => a[1] - b[1])
+                  .slice(0, mine.length + 1 - CACHE_MAX)
+                  .forEach(([k]) => sessionStorage.removeItem(k));
+            }
+            write();
+        } catch (e) {
+            // Quota (or a disabled store): clear our entries and retry once.
+            try {
+                for (let i = sessionStorage.length - 1; i >= 0; i--) {
+                    const k = sessionStorage.key(i);
+                    if (k && k.indexOf(CACHE_PREFIX) === 0) sessionStorage.removeItem(k);
+                }
+                write();
+            } catch (e2) {}
+        }
+    }
+    function restoreFromCache() {
+        if (!session_cache) return false;
+        try {
+            const raw = sessionStorage.getItem(cacheKey);
+            if (!raw) return false;
+            const state = JSON.parse(raw);
+            if (!state || !Array.isArray(state.t) || state.t.length === 0) return false;
+            renderConversation(state);
+            return true;
+        } catch (e) { return false; }
     }
 
     __INTERACTIVE_JS_INIT__
@@ -1296,8 +1370,13 @@ FRONTEND_JS_TEMPLATE = r"""
 
             if (finalText) {
                 conversation.turns.push({role: 'assistant', content: finalText, ts: Date.now()});
+                // Persist the completed turn to the session cache so returning
+                // to this search (e.g. after a result-tab switch) restores it
+                // instead of regenerating. Runs in both interactive and
+                // non-interactive modes and for every turn type.
+                saveCache();
             }
-            
+
             // Save state if this was an initial generation or a regeneration
             if (arguments.length === 0 && typeof updateState === 'function') {
                 updateState();
@@ -1338,6 +1417,10 @@ FRONTEND_JS_TEMPLATE = r"""
             updateShowMore();
         }
     }
+
+    // Fragment restore (shareable link / same-URL reload) wins; the session
+    // cache is the fallback that also survives result-tab navigation.
+    if (!restored && restoreFromCache()) restored = true;
 
     if (!restored) startStream();
 })();
@@ -1506,6 +1589,10 @@ class SXNGPlugin(Plugin):
         self.endpoint_url = raw_url
         
         self.url_state = os.getenv('LLM_URL_STATE', 'true').lower().strip() in ('true', '1', 'yes', 'on')
+        # Cache the completed answer in the browser's sessionStorage keyed by the
+        # search (query+lang+categories) so switching result tabs and returning
+        # restores it instead of paying to regenerate. Cleared when the tab closes.
+        self.session_cache = os.getenv('LLM_SESSION_CACHE', 'true').lower().strip() in ('true', '1', 'yes', 'on')
         self.ollama_unload_after = os.getenv('LLM_OLLAMA_UNLOAD_AFTER', 'false').lower().strip() in ('true', '1', 'yes', 'on')
         self.ollama_unload_url = ''
         if self.provider == 'ollama' and self.ollama_unload_after:
@@ -2174,6 +2261,11 @@ class SXNGPlugin(Plugin):
 
             raw_urls, raw_titles, raw_favicons = self._source_meta(clean_results)
 
+            # Cache identity: the same query on a different result tab is a
+            # different search, so the category set is part of the cache key.
+            cats = sorted(set(search.search_query.categories)) or ['general']
+            js_categories = safe_json(','.join(cats))
+
             js_q = safe_json(q_clean)
             js_lang = safe_json(lang)
             js_urls = safe_json(raw_urls)
@@ -2199,6 +2291,8 @@ class SXNGPlugin(Plugin):
                 .replace("__IS_INTERACTIVE__", 'true' if is_interactive else 'false') \
                 .replace("__IS_COLLAPSED__", 'true' if self.collapsed else 'false') \
                 .replace("__URL_STATE__", 'true' if self.url_state else 'false') \
+                .replace("__SESSION_CACHE__", 'true' if self.session_cache else 'false') \
+                .replace("__JS_CATEGORIES__", js_categories) \
                 .replace("__SHOW_METRICS__", 'true' if self.show_metrics else 'false') \
                 .replace("__SHOW_FOLLOWUPS__", 'true' if show_followups else 'false') \
                 .replace("__TK__", js_tk) \
