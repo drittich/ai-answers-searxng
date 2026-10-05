@@ -1137,7 +1137,7 @@ FRONTEND_JS_TEMPLATE = r"""
                 if (!liveEl) {
                     stableEl = document.createElement('span');
                     liveEl = document.createElement('span');
-                    liveEl.className = 'sxng-chunk';
+                    liveEl.className = 'sxng-chunk sxng-fade';
                     cursor.before(stableEl);
                     cursor.before(liveEl);
                 }
@@ -2351,8 +2351,11 @@ class SXNGPlugin(Plugin):
                         .sxng-chunk {{
                             opacity: 1;
                         }}
+                        /* Fade only the per-turn live container, once. Markdown
+                           spans are rebuilt every frame while streaming, so
+                           animating them restarts the fade and flickers. */
                         @media (min-width: 769px) {{
-                            .sxng-chunk {{
+                            .sxng-fade {{
                                 animation: sxng-fade-in 0.3s ease-out;
                             }}
                         }}
@@ -2454,7 +2457,7 @@ class SXNGPlugin(Plugin):
                         }}
                         @media (prefers-reduced-motion: reduce) {{
                             .sxng-cursor,
-                            .sxng-chunk,
+                            .sxng-fade,
                             .sxng-user-msg,
                             #sxng-stream-box.sxng-streaming .sxng-ai-header svg {{ animation: none; }}
                             .sxng-cursor {{ opacity: 0.6; }}
