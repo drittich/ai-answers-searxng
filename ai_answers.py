@@ -61,6 +61,35 @@ DEFAULT_TABS = "general,science,it,news"
 # toggle on the SearXNG preferences page (see AIFollowupsPlugin).
 FOLLOWUPS_PLUGIN_ID = "ai_answers_followups"
 
+# How often the AI overview is shown. "Never" is not a mode: it is the per-user
+# plugin switch on the Preferences page.
+OVERVIEW_MODE_COOKIE = "ai_answers_mode"
+OVERVIEW_MODES = ("always", "auto", "manual")
+AUTO_MIN_WORDS = 5
+AUTO_QUESTION_WORDS = frozenset((
+    "who", "what", "why", "how", "when", "where", "which", "is", "are", "can",
+    "does", "do", "should", "explain", "compare", "difference",
+))
+
+
+def should_auto_generate(query: str, has_direct_answer: bool) -> bool:
+    """The "It decides" rule: generate for question-like or longer searches,
+    unless SearXNG already answered directly (calculator, infobox, ...).
+    English-only, and cheap: no AI request."""
+    if has_direct_answer:
+        return False
+    q = (query or '').strip()
+    if '?' in q:
+        return True
+    words = q.split()
+    if not words:
+        return False
+    # "what's" -> "what"; "how-to" stays as it is
+    first = re.split(r"['\u2019]", words[0].lower(), maxsplit=1)[0]
+    if first in AUTO_QUESTION_WORDS:
+        return True
+    return len(words) >= AUTO_MIN_WORDS
+
 PROVIDER_PRESETS = {
     'openai':     {'url': 'https://api.openai.com/v1/chat/completions',       'model': 'gpt-4o-mini'},
     'openrouter': {'url': 'https://openrouter.ai/api/v1/chat/completions',    'model': 'qwen/qwen3.7-flash'},
@@ -218,6 +247,117 @@ INTERACTIVE_HTML = '''
                             </button>
                         </form>
                     </div>
+'''
+
+# Gear button opening the "how often" menu; rendered in the panel header and on
+# the "Generate" button row, in both interactive and simple modes.
+GEAR_HTML = '''<span class="sxng-gear-wrap"><button class="sxng-gear" type="button" title="AI overview settings" aria-label="AI overview settings" aria-haspopup="menu" aria-expanded="false">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+                        </button></span>'''
+
+# The menu is rendered once and moved next to whichever gear opened it.
+OVERVIEW_MODE_HTML = '''
+                    <div id="sxng-mode-menu" class="sxng-mode-menu" role="menu" aria-label="How often to show AI overviews" hidden>
+                        <div class="sxng-mode-title" aria-hidden="true">Show AI overviews</div>
+                        <button type="button" class="sxng-mode-item" role="menuitemradio" aria-checked="false" data-mode="always"><span class="sxng-mode-label">Always</span><span class="sxng-mode-desc">On every search</span></button>
+                        <button type="button" class="sxng-mode-item" role="menuitemradio" aria-checked="false" data-mode="auto"><span class="sxng-mode-label">It decides</span><span class="sxng-mode-desc">For questions and longer searches</span></button>
+                        <button type="button" class="sxng-mode-item" role="menuitemradio" aria-checked="false" data-mode="manual"><span class="sxng-mode-label">You decide</span><span class="sxng-mode-desc">Only when you click Generate</span></button>
+                        <button type="button" class="sxng-mode-item" role="menuitem" data-mode="never"><span class="sxng-mode-label">Never</span><span class="sxng-mode-desc">Turned off in Preferences</span></button>
+                        <div id="sxng-mode-never" class="sxng-mode-note" hidden>To stop AI overviews, switch off the AI Answers plugin on the <a id="sxng-mode-prefs" href="#">Preferences</a> page. Switch it back on to see them again.</div>
+                        <div id="sxng-mode-saved" class="sxng-mode-note" role="status"></div>
+                    </div>
+'''
+
+OVERVIEW_MODE_CSS = '''
+                        /* "You decide": only the one-line Generate row shows
+                           until it is clicked; the panel then grows in place. */
+                        #sxng-stream-box.sxng-pending > :not(style):not(script):not(#sxng-generate-row) { display: none; }
+                        #sxng-stream-box:not(.sxng-pending) > #sxng-generate-row { display: none; }
+                        .sxng-generate-row {
+                            display: flex;
+                            align-items: center;
+                            gap: 0.5rem;
+                        }
+                        .sxng-generate-btn {
+                            padding: 0.3rem 0.8rem;
+                            border: 1px solid var(--color-result-link, #5e81ac);
+                            border-radius: 999px;
+                            background: transparent;
+                            color: var(--color-result-link, #5e81ac);
+                            font-size: 0.9rem;
+                            cursor: pointer;
+                        }
+                        .sxng-generate-btn:hover { background: var(--color-base-background-hover, rgba(0,0,0,0.05)); }
+                        .sxng-gear-wrap { position: relative; display: inline-flex; }
+                        .sxng-gear {
+                            display: inline-flex;
+                            align-items: center;
+                            justify-content: center;
+                            width: 28px;
+                            height: 28px;
+                            padding: 0;
+                            border: none;
+                            border-radius: 6px;
+                            background: transparent;
+                            color: var(--color-base-font, inherit);
+                            opacity: 0.6;
+                            cursor: pointer;
+                        }
+                        .sxng-gear:hover, .sxng-gear[aria-expanded="true"] {
+                            opacity: 1;
+                            background: var(--color-base-background-hover, rgba(0,0,0,0.05));
+                        }
+                        .sxng-gear svg { width: 16px; height: 16px; }
+                        .sxng-mode-menu {
+                            position: absolute;
+                            top: calc(100% + 4px);
+                            right: 0;
+                            z-index: 2147483000;
+                            display: flex;
+                            flex-direction: column;
+                            width: 260px;
+                            max-width: calc(100vw - 32px);
+                            padding: 0.35rem;
+                            border-radius: 8px;
+                            background: var(--color-base-background, #fff);
+                            color: var(--color-base-font, #333);
+                            border: 1px solid var(--color-base-border, rgba(128,128,128,0.3));
+                            box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+                            font-size: 0.85rem;
+                            font-weight: 400;
+                            line-height: 1.35;
+                        }
+                        .sxng-mode-menu[hidden], .sxng-mode-note[hidden] { display: none; }
+                        .sxng-mode-title { padding: 0.25rem 0.5rem; font-weight: 600; }
+                        .sxng-mode-item {
+                            display: flex;
+                            flex-direction: column;
+                            align-items: flex-start;
+                            padding: 0.35rem 0.5rem 0.35rem 1.5rem;
+                            border: none;
+                            border-radius: 6px;
+                            background: transparent;
+                            color: inherit;
+                            text-align: left;
+                            cursor: pointer;
+                            position: relative;
+                        }
+                        .sxng-mode-item:hover, .sxng-mode-item:focus-visible {
+                            background: var(--color-base-background-hover, rgba(0,0,0,0.05));
+                        }
+                        .sxng-mode-item[aria-checked="true"]::before {
+                            content: "\\2713";
+                            position: absolute;
+                            left: 0.5rem;
+                            color: var(--color-result-link, #5e81ac);
+                        }
+                        .sxng-mode-desc { font-size: 0.75rem; opacity: 0.7; }
+                        .sxng-mode-note { padding: 0.35rem 0.5rem; font-size: 0.78rem; }
+                        .sxng-mode-note:empty { display: none; }
+                        @media (pointer: coarse) {
+                            .sxng-gear { width: 44px; height: 44px; }
+                            .sxng-generate-btn { padding: 0.55rem 1rem; }
+                        }
 '''
 
 CITATION_HELPER_JS = r'''
@@ -663,6 +803,11 @@ FRONTEND_JS_TEMPLATE = r"""
     const categories_init = __JS_CATEGORIES__;
     const show_metrics = __SHOW_METRICS__;
     const show_followups = __SHOW_FOLLOWUPS__;
+    // false: wait for the "Generate" button ("You decide", or "It decides"
+    // skipping this search). Restored answers are shown either way.
+    const auto_start = __AUTO_START__;
+    const overview_mode = __OVERVIEW_MODE__;
+    const mode_cookie = __MODE_COOKIE__;
     const box = document.getElementById('sxng-stream-box');
     const data = document.getElementById('sxng-stream-data');
     const answerWrap = document.getElementById('sxng-answer-wrap');
@@ -717,7 +862,82 @@ FRONTEND_JS_TEMPLATE = r"""
             el.style.display = d;
         }
     }
-    hideNativeAnswers();
+
+    // Show the panel (leaving the "Generate" row behind) and hide the native
+    // answers it replaces. Runs once, when there is an answer to show.
+    let panelRevealed = false;
+    function revealPanel() {
+        if (panelRevealed) return;
+        panelRevealed = true;
+        box.classList.remove('sxng-pending');
+        hideNativeAnswers();
+    }
+
+    // Gear menu: how often to show overviews. The choice is a cookie the
+    // server reads on the next search; this page is left as it is.
+    const modeMenu = document.getElementById('sxng-mode-menu');
+    const modeSaved = document.getElementById('sxng-mode-saved');
+    const modeNever = document.getElementById('sxng-mode-never');
+    const prefsLink = document.getElementById('sxng-mode-prefs');
+    if (prefsLink) prefsLink.href = script_root + '/preferences';
+    let menuGear = null;
+    function markMode(mode) {
+        modeMenu.querySelectorAll('[role="menuitemradio"]').forEach(el => {
+            el.setAttribute('aria-checked', el.dataset.mode === mode ? 'true' : 'false');
+        });
+    }
+    function closeModeMenu(refocus) {
+        if (!menuGear) return;
+        modeMenu.hidden = true;
+        menuGear.setAttribute('aria-expanded', 'false');
+        if (refocus) menuGear.focus();
+        menuGear = null;
+    }
+    function openModeMenu(gear) {
+        gear.parentNode.appendChild(modeMenu);
+        modeMenu.hidden = false;
+        modeNever.hidden = true;
+        modeSaved.textContent = '';
+        gear.setAttribute('aria-expanded', 'true');
+        menuGear = gear;
+        const first = modeMenu.querySelector('[aria-checked="true"]') || modeMenu.querySelector('[data-mode]');
+        if (first) first.focus();
+    }
+    if (modeMenu) {
+        markMode(overview_mode);
+        box.querySelectorAll('.sxng-gear').forEach(gear => {
+            gear.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const wasOpen = menuGear === gear;
+                closeModeMenu(false);
+                if (!wasOpen) openModeMenu(gear);
+            });
+        });
+        modeMenu.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const item = e.target.closest('[data-mode]');
+            if (!item) return;
+            const mode = item.dataset.mode;
+            if (mode === 'never') {
+                // Not a cookie value: "Never" is the plugin's Preferences switch.
+                modeNever.hidden = false;
+                return;
+            }
+            document.cookie = mode_cookie + '=' + mode + '; path=' + (script_root || '/') +
+                '; max-age=31536000; SameSite=Lax';
+            markMode(mode);
+            modeSaved.textContent = 'Saved. Applies from your next search.';
+        });
+        modeMenu.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') { e.preventDefault(); closeModeMenu(true); return; }
+            if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+            const items = Array.from(modeMenu.querySelectorAll('[data-mode]'));
+            const i = items.indexOf(document.activeElement);
+            const next = items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length];
+            if (next) { e.preventDefault(); next.focus(); }
+        });
+        document.addEventListener('click', () => closeModeMenu(false));
+    }
 
     // permanent=true retires the toggle for good (new turns streaming in, or
     // content that fits); otherwise the button flips to "Show less" so the
@@ -1422,7 +1642,16 @@ FRONTEND_JS_TEMPLATE = r"""
     // cache is the fallback that also survives result-tab navigation.
     if (!restored && restoreFromCache()) restored = true;
 
-    if (!restored) startStream();
+    // A shared or cached answer is always shown, whatever the mode.
+    const generateBtn = document.getElementById('sxng-generate');
+    if (generateBtn) generateBtn.addEventListener('click', () => {
+        if (isStreaming) return;
+        closeModeMenu(false);
+        revealPanel();
+        startStream();
+    });
+    if (restored) revealPanel();
+    else if (auto_start) { revealPanel(); startStream(); }
 })();
 """
 
@@ -1485,7 +1714,22 @@ class SXNGPlugin(Plugin):
         self.collapsed = os.getenv('LLM_COLLAPSED', 'true').lower().strip() in ('true', '1', 'yes', 'on')
         self.show_metrics = os.getenv('LLM_SHOW_METRICS', 'true').lower().strip() in ('true', '1', 'yes', 'on')
         self.followups = os.getenv('LLM_FOLLOWUPS', 'false').lower().strip() in ('true', '1', 'yes', 'on')
-        self.question_mark_required = os.getenv('LLM_QUESTION_MARK_REQUIRED', 'false').lower().strip() in ('true', '1', 'yes', 'on')
+        raw_qmark = os.getenv('LLM_QUESTION_MARK_REQUIRED', '').lower().strip()
+        self.question_mark_required = raw_qmark in ('true', '1', 'yes', 'on')
+        if raw_qmark:
+            logger.warning(f"{PLUGIN_NAME}: LLM_QUESTION_MARK_REQUIRED is deprecated and will be removed "
+                           "in a later release; use LLM_OVERVIEW_MODE=auto instead.")
+        # Admin default for how often the overview is shown; a user's cookie
+        # overrides it per search (see _overview_mode).
+        raw_mode = os.getenv('LLM_OVERVIEW_MODE', '').lower().strip()
+        if raw_mode in OVERVIEW_MODES:
+            self.overview_mode = raw_mode
+        else:
+            if raw_mode:
+                logger.warning(f"{PLUGIN_NAME}: Invalid LLM_OVERVIEW_MODE '{raw_mode}' "
+                               "(use always, auto, or manual). Falling back to 'always'. "
+                               "To turn overviews off by default, set the plugin's active: false.")
+            self.overview_mode = 'always'
         raw_provider = os.getenv('LLM_PROVIDER', '').lower().strip()
         
         raw_url = os.getenv('LLM_URL', '').strip()
@@ -2225,6 +2469,17 @@ class SXNGPlugin(Plugin):
             pass
         return self.followups
 
+    def _overview_mode(self, request) -> str:
+        # The user's choice from the gear menu (a cookie) wins over the admin
+        # default. Unknown values are ignored rather than trusted.
+        try:
+            cookie = request.cookies.get(OVERVIEW_MODE_COOKIE)
+            if cookie in OVERVIEW_MODES:
+                return cookie
+        except Exception:
+            pass
+        return self.overview_mode
+
     def post_search(self, request: "SXNG_Request", search: "SearchWithPlugins") -> EngineResults:
         results = EngineResults()
         try:
@@ -2252,6 +2507,13 @@ class SXNGPlugin(Plugin):
 
             q_clean = search.search_query.query.strip()
             lang = search.search_query.lang
+
+            # Without auto_start the page shows a "Generate" button instead of
+            # streaming; restored (shared/cached) answers are shown regardless.
+            overview_mode = self._overview_mode(request)
+            auto_start = overview_mode == 'always' or (
+                overview_mode == 'auto'
+                and should_auto_generate(q_clean, bool(infoboxes or answers)))
             tk = self._make_token(str(int(time.time())))
             
             # XSS blocking
@@ -2295,6 +2557,9 @@ class SXNGPlugin(Plugin):
                 .replace("__JS_CATEGORIES__", js_categories) \
                 .replace("__SHOW_METRICS__", 'true' if self.show_metrics else 'false') \
                 .replace("__SHOW_FOLLOWUPS__", 'true' if show_followups else 'false') \
+                .replace("__AUTO_START__", 'true' if auto_start else 'false') \
+                .replace("__OVERVIEW_MODE__", safe_json(overview_mode)) \
+                .replace("__MODE_COOKIE__", safe_json(OVERVIEW_MODE_COOKIE)) \
                 .replace("__TK__", js_tk) \
                 .replace("__SCRIPT_ROOT__", js_script_root) \
                 .replace("__CITATION_HELPER_JS__", CITATION_HELPER_JS) \
@@ -2314,9 +2579,10 @@ class SXNGPlugin(Plugin):
             show_more_html = ('<div id="sxng-show-more-wrap" class="sxng-show-more-wrap">'
                               '<button id="sxng-show-more" class="sxng-show-more-btn" type="button">Show more</button>'
                               '</div>') if self.collapsed else ''
+            pending_class = '' if auto_start else ' sxng-pending'
 
             html_payload = f'''
-                <article id="sxng-stream-box" class="answer" style="margin: 1rem 0;">
+                <article id="sxng-stream-box" class="answer{pending_class}" style="margin: 1rem 0;">
                     <style>
                         @keyframes sxng-fade-pulse {{
                             0%, 100% {{ opacity: 0.1; }}
@@ -2387,7 +2653,7 @@ class SXNGPlugin(Plugin):
                             clip-path: inset(50%);
                             white-space: nowrap;
                         }}
-                        .sxng-ai-header svg {{
+                        .sxng-ai-header > svg {{
                             width: 18px;
                             height: 18px;
                             stroke: var(--color-result-link, #5e81ac);
@@ -2398,7 +2664,7 @@ class SXNGPlugin(Plugin):
                             0%, 100% {{ opacity: 1; transform: scale(1); }}
                             50% {{ opacity: 0.45; transform: scale(0.88); }}
                         }}
-                        #sxng-stream-box.sxng-streaming .sxng-ai-header svg {{
+                        #sxng-stream-box.sxng-streaming .sxng-ai-header > svg {{
                             animation: sxng-sparkle-pulse 1.6s ease-in-out infinite;
                         }}
                         #sxng-stream-data .sxng-md-p {{ margin: 0 0 0.5rem; white-space: normal; }}
@@ -2464,7 +2730,7 @@ class SXNGPlugin(Plugin):
                             .sxng-cursor,
                             .sxng-fade,
                             .sxng-user-msg,
-                            #sxng-stream-box.sxng-streaming .sxng-ai-header svg {{ animation: none; }}
+                            #sxng-stream-box.sxng-streaming .sxng-ai-header > svg {{ animation: none; }}
                             .sxng-cursor {{ opacity: 0.6; }}
                             .sxng-footer, .sxng-show-more-wrap, .sxng-btn,
                             .sxng-input, .sxng-input-line, .sxng-input-submit {{ transition: none; }}
@@ -2616,8 +2882,13 @@ class SXNGPlugin(Plugin):
                                 opacity: 0.6;
                             }}
                         }}
+                        {OVERVIEW_MODE_CSS}
                         {interactive_css}
                     </style>
+                    <div id="sxng-generate-row" class="sxng-generate-row">
+                        <button id="sxng-generate" class="sxng-generate-btn" type="button">✨ Generate AI overview</button>
+                        {GEAR_HTML}
+                    </div>
                     <div class="sxng-ai-header">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                             <path d="M12 6V2H8" />
@@ -2633,6 +2904,7 @@ class SXNGPlugin(Plugin):
                             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
                             <span>Stop</span>
                         </button>
+                        {GEAR_HTML}
                     </div>
                     <span id="sxng-live-status" role="status" class="sxng-visually-hidden"></span>
                     <div id="sxng-answer-wrap" class="{collapsed_class}">
@@ -2643,6 +2915,7 @@ class SXNGPlugin(Plugin):
                     <div id="sxng-followups" class="sxng-followups"></div>
                     <div id="sxng-metrics-inline" class="sxng-metrics-inline"></div>
                     {interactive_html}
+                    {OVERVIEW_MODE_HTML}
                     <script>
                     {js_code}
                     </script>

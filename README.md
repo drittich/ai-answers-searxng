@@ -21,6 +21,7 @@ Features:
 - mobile-tuned: swipeable source/follow-up rows, shorter collapsed preview, condensed inline metrics, and a keyboard-aware follow-up input
 - provider detection based on URL
 - per-user opt-in/opt-out via the SearXNG Preferences page
+- per-user choice of how often the overview appears (Always / It decides / You decide), from the gear icon on the panel
 
 ## Installation (Docker on Windows)
 
@@ -147,7 +148,8 @@ Configure via the environment variables:
 - `LLM_INTERACTIVE`: UI mode. Default is `true` (interactive: copy, regenerate, follow up). Set to `false` for simple response only mode.
 - `LLM_FOLLOWUPS`: Instance-wide default for the follow-up question chips shown below the answer (interactive mode only). Default `false`. If you register the `AIFollowupsPlugin` toggle (see above), each user's per-user setting takes precedence over this value; otherwise this controls it for everyone.
 - `LLM_COLLAPSED`: Show the answer as a fixed-height preview with a "Show more" / "Show less" toggle (no layout shift while streaming). Set to `false` for the always-expanded behavior. Default `true`.
-- `LLM_QUESTION_MARK_REQUIRED`: Only trigger AI answers when the query contains `?`. Default `false`.
+- `LLM_OVERVIEW_MODE`: Default for how often the AI overview is shown: `always`, `auto`, or `manual` (see [How often the overview appears](#how-often-the-overview-appears)). Each user's choice from the gear menu overrides it. Any other value (including `never`) logs a warning and falls back to `always`. Default `always`.
+- `LLM_QUESTION_MARK_REQUIRED`: **Deprecated** — use `LLM_OVERVIEW_MODE=auto` instead; it will be removed in a later release and logs a warning when set. Only trigger AI answers when the query contains `?`, in every mode. Default `false`.
 - `LLM_OLLAMA_UNLOAD_AFTER`: Unload Ollama model after each response. Default `false`.
 - `LLM_URL_STATE`: Save/restore the conversation in the URL `#ai=` fragment so answers survive reloads and links are shareable. Set to `false` to keep conversations out of URLs and browser history. Default `true`.
 - `LLM_SESSION_CACHE`: Cache the completed answer in the browser's `sessionStorage` (keyed by query + language + result categories) so switching result tabs (e.g. General → Images → General) and returning restores the answer instead of paying to regenerate it. The cache lives only for the browser session and is cleared when the tab closes. Set to `false` to always regenerate. Default `true`.
@@ -155,6 +157,19 @@ Configure via the environment variables:
 > **Source favicons (optional, not an `LLM_` variable).** The source chips below each answer show site favicons only when SearXNG's own favicon proxy is enabled — set `search.favicon_resolver` in `settings.yml` (e.g. `duckduckgo`, `google`, `allesedv`, or `yandex`). Favicon URLs are built server-side through that proxy (correct HMAC + caching, so no third-party favicon service is contacted directly by the browser). When the resolver is unset, chips fall back to a colored domain-initial monogram — no configuration required.
 
 > **Follow-up chips.** In interactive mode the model is asked to append a short machine-readable block of 2–3 suggested follow-up questions, which the client splits off (it never appears in the answer text) and renders as clickable chips. If a particular model doesn't emit them reliably, the chips simply don't show — the answer is unaffected.
+
+### How often the overview appears
+
+Each user picks this from the gear icon in the panel header (or next to the **Generate** button). The choice is stored in an `ai_answers_mode` cookie (one year, `SameSite=Lax`) and takes effect on the next search. Without a cookie, `LLM_OVERVIEW_MODE` applies.
+
+| Option | Value | Behaviour |
+| --- | --- | --- |
+| Always | `always` | Generate an overview for every eligible search. |
+| It decides | `auto` | Generate when the query contains `?`, starts with a question word (who, what, why, how, when, where, which, is, are, can, does, do, should, explain, compare, difference — English only), or has 5 or more words. Skip when SearXNG already returned a direct answer (e.g. a calculator result) or an infobox, and show the **Generate** button instead. No AI request is made to decide. |
+| You decide | `manual` | Show a one-line **✨ Generate AI overview** button. Nothing is sent to the AI provider until it is clicked. |
+| Never | — | Switch off the AI Answers plugin on the SearXNG Preferences page (the menu links there). To have overviews off by default for new users, set `active: false` on the plugin in `settings.yml`. |
+
+A shared `#ai=` link or an answer cached for the same search is always restored, whatever the mode.
 
 ## How It Works
 1. user initial search

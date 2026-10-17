@@ -649,3 +649,177 @@ def test_post_search_question_mark_gate(make_plugin):
     search = MockSearch(query="why is the sky blue?")
     p.post_search(None, search)
     assert len(search.result_container.answers) == 1
+
+
+# ---------------------------------------------------------------- overview frequency
+
+@pytest.mark.parametrize("query,expected", [
+    ("sky color?", True),                      # contains '?'
+    ("why sky blue", True),                    # question word
+    ("How rainbows form", True),               # case-insensitive
+    ("what's a monad", True),                  # contraction of a question word
+    ("compare rust go", True),
+    ("difference tcp udp", True),
+    ("best budget mechanical keyboard 2026", True),  # 5 words
+    ("python list comprehension", False),      # short keyword search
+    ("weather", False),
+    ("whatever forever", False),
+    ("how-to guides", False),                  # hyphenated word isn't "how"               # starts with, but isn't, a question word
+    ("", False),
+])
+def test_auto_rule(query, expected):
+    import ai_answers
+    assert ai_answers.should_auto_generate(query, has_direct_answer=False) is expected
+
+
+def test_auto_rule_skips_when_direct_answer():
+    import ai_answers
+    assert ai_answers.should_auto_generate("what is 2+2?", has_direct_answer=True) is False
+
+
+class FakeRequest:
+    """Stand-in for the SearXNG request seen by post_search."""
+    def __init__(self, cookies=None, script_root=''):
+        self.cookies = cookies or {}
+        self.form = {}
+        self.headers = {}
+        self.script_root = script_root
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (None, "always"),
+    ("always", "always"),
+    ("auto", "auto"),
+    (" Manual ", "manual"),
+])
+def test_overview_mode_env(make_plugin, raw, expected):
+    env = {"LLM_PROVIDER": "openrouter", "LLM_KEY": "k"}
+    if raw is not None:
+        env["LLM_OVERVIEW_MODE"] = raw
+    p = make_plugin(**env)
+    assert p._overview_mode(None) == expected
+
+
+@pytest.mark.parametrize("raw", ["never", "sometimes"])
+def test_overview_mode_env_invalid_falls_back(make_plugin, caplog, raw):
+    with caplog.at_level("WARNING"):
+        p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE=raw)
+    assert p._overview_mode(None) == "always"
+    assert "LLM_OVERVIEW_MODE" in caplog.text
+
+
+def test_overview_mode_cookie_overrides_env(make_plugin):
+    import ai_answers
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE='auto')
+    cookie = ai_answers.OVERVIEW_MODE_COOKIE
+    assert p._overview_mode(FakeRequest({cookie: 'manual'})) == "manual"
+    assert p._overview_mode(FakeRequest({cookie: 'always'})) == "always"
+    # A junk cookie is ignored in favour of the admin default.
+    assert p._overview_mode(FakeRequest({cookie: 'never'})) == "auto"
+    assert p._overview_mode(FakeRequest()) == "auto"
+
+
+def test_question_mark_required_is_deprecated(make_plugin, caplog):
+    with caplog.at_level("WARNING"):
+        make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_QUESTION_MARK_REQUIRED='true')
+    assert "LLM_QUESTION_MARK_REQUIRED" in caplog.text
+    assert "LLM_OVERVIEW_MODE=auto" in caplog.text
+
+
+def _render(plugin, request=None, **search_kw):
+    search = MockSearch(**search_kw)
+    plugin.post_search(request, search)
+    answers = list(search.result_container.answers)
+    assert len(answers) == 1
+    return answers[0]
+
+
+def _assert_start_state(html):
+    if 'const auto_start = true' in html:
+        assert 'class="answer sxng-pending"' not in html
+        return True
+    assert 'const auto_start = false' in html
+    assert 'class="answer sxng-pending"' in html
+    return False
+
+
+def test_post_search_always_mode_assert_start_state(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    assert _assert_start_state(_render(p, query="weather")) is True
+
+
+def test_post_search_manual_mode_shows_generate_button(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE='manual')
+    html = _render(p, query="why is the sky blue?")
+    assert _assert_start_state(html) is False
+    assert 'id="sxng-generate"' in html
+    assert 'Generate AI overview' in html
+    # The context is already in the page, so the click needs no extra search.
+    assert 'const b64_init = "' in html
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("why is the sky blue", True),
+    ("python list comprehension", False),
+])
+def test_post_search_auto_mode_applies_rule(make_plugin, query, expected):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE='auto')
+    html = _render(p, query=query)
+    assert _assert_start_state(html) is expected
+    if not expected:
+        assert 'id="sxng-generate"' in html
+
+
+def test_post_search_auto_mode_skips_on_infobox(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE='auto')
+    search = MockSearch(query="what is python")
+    search.result_container.infoboxes = [{'infobox': 'Python', 'content': 'A language'}]
+    p.post_search(None, search)
+    assert _assert_start_state(list(search.result_container.answers)[0]) is False
+
+
+def test_post_search_cookie_mode_wins(make_plugin):
+    import ai_answers
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    req = FakeRequest({ai_answers.OVERVIEW_MODE_COOKIE: 'manual'})
+    html = _render(p, request=req, query="why is the sky blue?")
+    assert _assert_start_state(html) is False
+    assert 'const overview_mode = "manual"' in html
+
+
+@pytest.mark.parametrize("interactive", ["true", "false"])
+def test_post_search_gear_menu_in_both_modes(make_plugin, interactive):
+    import ai_answers
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_INTERACTIVE=interactive)
+    html = _render(p, request=FakeRequest(script_root='/searx'))
+    # One gear in the panel header, one on the "You decide" button row.
+    assert html.count('class="sxng-gear"') == 2
+    assert 'id="sxng-mode-menu"' in html
+    for label in ("Always", "It decides", "You decide", "Never"):
+        assert f'>{label}<' in html
+    # "Never" explains the Preferences switch and links to it.
+    assert "script_root + '/preferences'" in html
+    # Cookie is scoped to the script root, kept a year, SameSite=Lax.
+    assert f'const mode_cookie = "{ai_answers.OVERVIEW_MODE_COOKIE}"' in html
+    assert 'const script_root = "/searx"' in html
+    assert 'max-age=31536000' in html
+    assert 'SameSite=Lax' in html
+
+
+@pytest.mark.parametrize("mode", ["always", "auto", "manual"])
+def test_post_search_restores_shared_and_cached_answers_in_every_mode(make_plugin, mode):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE=mode)
+    html = _render(p, query="python list comprehension")
+    # Restore paths run before the mode is consulted and reveal the panel.
+    restore = html.index('restoreFromCache()) restored = true')
+    decide = html.index('if (restored) revealPanel()')
+    assert restore < decide
+    assert html.index("location.hash.includes('ai=')") < decide
+
+
+def test_post_search_question_mark_gate_applies_in_manual_mode(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k',
+                    LLM_QUESTION_MARK_REQUIRED='true', LLM_OVERVIEW_MODE='manual')
+    search = MockSearch(query="sky color")
+    p.post_search(None, search)
+    assert len(search.result_container.answers) == 0
