@@ -2326,6 +2326,11 @@ class SXNGPlugin(Plugin):
                             from {{ opacity: 0; }}
                             to {{ opacity: 1; }}
                         }}
+                        /* Match the theme's search box radius (0.8rem) rather
+                           than the answers panel's default 10px. */
+                        #answers:has(#sxng-stream-box) {{
+                            border-radius: 0.8rem;
+                        }}
                         #sxng-answer-wrap {{
                             font-family: Inter, "Helvetica Neue", Arial, sans-serif;
                             font-size: 15px;
