@@ -308,7 +308,7 @@ OVERVIEW_MODE_CSS = '''
                             width: 1em;
                             height: 1em;
                             margin-right: 0.35em;
-                            vertical-align: -0.125em;
+                            flex-shrink: 0;
                         }
                         .sxng-generate-btn:hover { background: var(--color-base-background-hover, rgba(0,0,0,0.05)); }
                         .sxng-gear-wrap { position: relative; display: inline-flex; }
@@ -379,7 +379,7 @@ OVERVIEW_MODE_CSS = '''
                         .sxng-mode-note:empty { display: none; }
                         @media (pointer: coarse) {
                             .sxng-gear { width: 44px; height: 44px; }
-                            .sxng-generate-btn { padding: 0.05rem 1rem; }
+                            .sxng-generate-btn { padding-inline: 1rem; }
                             /* Invisible 44px tap area around the slim pill. */
                             .sxng-generate-btn::before {
                                 content: "";
