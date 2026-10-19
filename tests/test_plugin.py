@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import re
 import time
 
 import pytest
@@ -861,16 +862,22 @@ def test_post_search_question_mark_gate_applies_in_manual_mode(make_plugin):
     assert len(search.result_container.answers) == 0
 
 
-def test_cookieless_user_gets_no_followups_with_companion_plugin_default(make_plugin, monkeypatch):
-    # SearXNG seeds a cookieless user's plugin choices from each registered
-    # plugin's `active` state; README registers the companion with active: false.
+@pytest.mark.parametrize("stored", ["off", "absent"])
+def test_followups_off_on_render_and_stream_without_user_opt_in(make_plugin, monkeypatch, stored):
+    """With LLM_FOLLOWUPS unset, a user who hasn't opted in gets no follow-ups
+    on either the rendered page or the stream route.
+
+    SearXNG's own seeding of a cookieless user's plugin choices from each
+    plugin's `active` default (README: companion registered active: false)
+    can't run here because searx is mocked. Instead this covers both states
+    that seeding can leave the preferences in: the companion choice stored
+    as off, and no stored choice at all (env fallback).
+    """
     import flask
     import ai_answers
 
-    class Cfg:
-        active = False
-    companion = ai_answers.AIFollowupsPlugin(Cfg())
-    prefs = _req_with_plugin_choices({ai_answers.FOLLOWUPS_PLUGIN_ID: companion.active}).preferences
+    choices = {ai_answers.FOLLOWUPS_PLUGIN_ID: False} if stored == "off" else {}
+    prefs = _req_with_plugin_choices(choices).preferences
 
     p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
     req = FakeRequest()
@@ -893,21 +900,60 @@ def test_cookieless_user_gets_no_followups_with_companion_plugin_default(make_pl
 
 
 def _coarse_pointer_css(html):
-    """Bodies of every `@media (pointer: coarse)` block in the page CSS."""
-    import re
-    return re.findall(r'@media \(pointer: coarse\)\s*\{(.*?)\n\s*\}\n', html, re.S)
+    """Bodies of every `@media (pointer: coarse)` block in the page CSS, each
+    extracted up to its matching closing brace."""
+    bodies = []
+    for m in re.finditer(r'@media \(pointer: coarse\)\s*\{', html):
+        depth, i = 1, m.end()
+        while depth:
+            depth += {'{': 1, '}': -1}.get(html[i], 0)
+            i += 1
+        bodies.append(html[m.end():i - 1])
+    return bodies
+
+
+def _css_rule(css, selector):
+    """Declarations of the first rule in `css` whose selector is exactly `selector`."""
+    m = re.search(r'(?:^|[;{}\s])' + re.escape(selector) + r'\s*\{([^{}]*)\}', css)
+    return m.group(1) if m else None
+
+
+def test_coarse_pointer_css_extracts_whole_media_block():
+    html = ("@media (pointer: coarse) {\n  .a { x: 1; }\n  .b {\n    y: 2;\n  }\n}\n"
+            ".c { z: 3; }\n")
+    assert _coarse_pointer_css(html) == ["\n  .a { x: 1; }\n  .b {\n    y: 2;\n  }\n"]
+
+
+def _touch_rules(html, selector):
+    return [r for r in (_css_rule(b, selector) for b in _coarse_pointer_css(html)) if r]
 
 
 def test_post_search_generate_button_keeps_44px_touch_target(make_plugin):
-    import re
     p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE='manual')
     html = _render(p, query="why is the sky blue?")
-    touch = "\n".join(_coarse_pointer_css(html))
     # The visible pill stays short; an invisible pseudo-element supplies the
     # tap area on touch screens.
-    hit = re.search(r'\.sxng-generate-btn::(?:before|after)\s*\{([^}]*)\}', touch)
-    assert hit, "no touch hit-area pseudo-element for the Generate button"
-    rule = hit.group(1)
-    assert re.search(r'min-height:\s*44px', rule)
-    assert re.search(r'position:\s*absolute', rule)
-    assert re.search(r'\.sxng-generate-btn\s*\{[^}]*position:\s*relative', html)
+    rules = _touch_rules(html, '.sxng-generate-btn::before')
+    assert rules, "no touch hit-area pseudo-element for the Generate button"
+    assert re.search(r'min-height:\s*44px', rules[0])
+    assert re.search(r'position:\s*absolute', rules[0])
+    assert re.search(r'position:\s*relative', _css_rule(html, '.sxng-generate-btn'))
+
+
+def test_post_search_generate_button_touch_override_only_widens(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE='manual')
+    html = _render(p, query="why is the sky blue?")
+    overrides = _touch_rules(html, '.sxng-generate-btn')
+    assert overrides
+    for rule in overrides:
+        # Vertical padding lives once, in the base rule.
+        assert not re.search(r'(?<![-\w])padding\s*:', rule)
+        assert re.search(r'padding-inline\s*:', rule)
+
+
+def test_post_search_generate_button_icon_is_flex_item(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE='manual')
+    html = _render(p, query="why is the sky blue?")
+    rule = _css_rule(html, '.sxng-generate-btn > svg')
+    assert re.search(r'flex-shrink:\s*0', rule)
+    assert 'vertical-align' not in rule
