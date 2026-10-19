@@ -1,6 +1,6 @@
 # Replace the sparkles emoji on the Generate button with the bot icon
 
-Status: ready-for-agent
+Status: resolved
 Type: task
 
 ## What
@@ -19,9 +19,10 @@ The panel header's bot icon stays as it is. The CSS keyframes are named `sxng-sp
 
 ## Acceptance criteria
 
-- [ ] The Generate button shows the header's bot SVG before its label. It's sized to the text (about 1em), lined up vertically, and `aria-hidden`.
-- [ ] No ✨ (U+2728) or other sparkle glyph/icon in `ai_answers.py` or `README.md`.
-- [ ] `sxng-sparkle-pulse` renamed everywhere it's used (lines 2663, 2668, 2733).
-- [ ] Tests pass.
+- [x] The Generate button shows the header's bot SVG before its label. It's sized to the text (about 1em), lined up vertically, and `aria-hidden`.
+- [x] No ✨ (U+2728) or other sparkle glyph/icon in `ai_answers.py` or `README.md`.
+- [x] `sxng-sparkle-pulse` renamed everywhere it's used (lines 2663, 2668, 2733).
+- [x] Tests pass.
 
 ## Comments
+- 2026-10-18: Implemented on branch `generate-button-polish` and reviewed; status changed to resolved.

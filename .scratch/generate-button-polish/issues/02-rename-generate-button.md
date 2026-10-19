@@ -1,6 +1,6 @@
 # Rename the Generate button to "Generate AI Summary"
 
-Status: ready-for-agent
+Status: resolved
 Type: task
 
 ## What
@@ -17,8 +17,9 @@ Out of scope: renaming "AI overview" elsewhere (menu title "Show AI overviews", 
 
 ## Acceptance criteria
 
-- [ ] The button reads `Generate AI Summary`.
-- [ ] README matches.
-- [ ] Tests that check the label are updated and pass.
+- [x] The button reads `Generate AI Summary`.
+- [x] README matches.
+- [x] Tests that check the label are updated and pass.
 
 ## Comments
+- 2026-10-18: Implemented on branch `generate-button-polish` and reviewed; status changed to resolved.

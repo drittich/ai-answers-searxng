@@ -1,6 +1,6 @@
 # Default to "You decide" and no follow-up suggestions for users without cookies
 
-Status: done
+Status: resolved
 Type: task
 
 ## What
@@ -39,3 +39,4 @@ Assumption: the request said "no auto-response suggestions". This ticket reads t
 ## Comments
 
 - Follow-up defaults (code check; the live deployment was not reachable from the agent): the code already defaults to off. `LLM_FOLLOWUPS` falls back to `false`; when `AIFollowupsPlugin` is registered, its per-user choice wins, and SearXNG seeds a cookieless user's choice from the plugin's `active`, which `Plugin.__init__` takes from `settings.yml` (the class attribute `active = False` is overwritten by the config value). So if chips show for cookieless users on the deployment, check `settings.yml` for `AIFollowupsPlugin: active: true` (or, with the companion not registered, `LLM_FOLLOWUPS=true`). Note that a registered companion with `active: false` beats `LLM_FOLLOWUPS=true`. Added `test_cookieless_user_gets_no_followups_with_companion_plugin_default`, which covers both the rendered page (`show_followups = false`) and the `/ai-stream` prompt (no `<<FOLLOWUPS>>` instruction).
+- 2026-10-18: Implemented on branch `generate-button-polish` and reviewed; status changed to resolved.

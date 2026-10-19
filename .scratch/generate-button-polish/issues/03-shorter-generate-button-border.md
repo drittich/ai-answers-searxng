@@ -1,6 +1,6 @@
 # Make the Generate button's border about half as tall
 
-Status: ready-for-agent
+Status: resolved
 Type: task
 
 ## What
@@ -22,10 +22,11 @@ The gear button next to it (`.sxng-gear`, 28px) should still line up vertically 
 
 ## Acceptance criteria
 
-- [ ] On desktop, the button's border box is about 50% of its current height.
-- [ ] The label is centred vertically.
-- [ ] The gear and the button line up in the row.
-- [ ] On touch, the tap target stays ≥44px tall even if the visible pill is shorter.
-- [ ] Checked in light and dark themes.
+- [x] On desktop, the button's border box is about 50% of its current height.
+- [x] The label is centred vertically.
+- [x] The gear and the button line up in the row.
+- [x] On touch, the tap target stays ≥44px tall even if the visible pill is shorter.
+- [x] Checked in light and dark themes.
 
 ## Comments
+- 2026-10-18: Implemented on branch `generate-button-polish` and reviewed; status changed to resolved.
