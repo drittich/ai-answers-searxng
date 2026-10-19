@@ -823,3 +823,24 @@ def test_post_search_question_mark_gate_applies_in_manual_mode(make_plugin):
     search = MockSearch(query="sky color")
     p.post_search(None, search)
     assert len(search.result_container.answers) == 0
+
+
+def _coarse_pointer_css(html):
+    """Bodies of every `@media (pointer: coarse)` block in the page CSS."""
+    import re
+    return re.findall(r'@media \(pointer: coarse\)\s*\{(.*?)\n\s*\}\n', html, re.S)
+
+
+def test_post_search_generate_button_keeps_44px_touch_target(make_plugin):
+    import re
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE='manual')
+    html = _render(p, query="why is the sky blue?")
+    touch = "\n".join(_coarse_pointer_css(html))
+    # The visible pill stays short; an invisible pseudo-element supplies the
+    # tap area on touch screens.
+    hit = re.search(r'\.sxng-generate-btn::(?:before|after)\s*\{([^}]*)\}', touch)
+    assert hit, "no touch hit-area pseudo-element for the Generate button"
+    rule = hit.group(1)
+    assert re.search(r'min-height:\s*44px', rule)
+    assert re.search(r'position:\s*absolute', rule)
+    assert re.search(r'\.sxng-generate-btn\s*\{[^}]*position:\s*relative', html)

@@ -279,7 +279,13 @@ OVERVIEW_MODE_CSS = '''
                             gap: 0.5rem;
                         }
                         .sxng-generate-btn {
-                            padding: 0.3rem 0.8rem;
+                            /* A slim pill: explicit line-height so the theme's
+                               taller one doesn't inflate it; flex centres the label. */
+                            position: relative;
+                            display: inline-flex;
+                            align-items: center;
+                            padding: 0.05rem 0.8rem;
+                            line-height: 1;
                             border: 1px solid var(--color-result-link, #5e81ac);
                             border-radius: 999px;
                             background: transparent;
@@ -356,7 +362,17 @@ OVERVIEW_MODE_CSS = '''
                         .sxng-mode-note:empty { display: none; }
                         @media (pointer: coarse) {
                             .sxng-gear { width: 44px; height: 44px; }
-                            .sxng-generate-btn { padding: 0.55rem 1rem; }
+                            .sxng-generate-btn { padding: 0.05rem 1rem; }
+                            /* Invisible 44px tap area around the slim pill. */
+                            .sxng-generate-btn::before {
+                                content: "";
+                                position: absolute;
+                                left: 0;
+                                right: 0;
+                                top: 50%;
+                                min-height: 44px;
+                                transform: translateY(-50%);
+                            }
                         }
 '''
 
