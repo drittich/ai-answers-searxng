@@ -687,7 +687,7 @@ class FakeRequest:
 
 
 @pytest.mark.parametrize("raw,expected", [
-    (None, "always"),
+    (None, "manual"),
     ("always", "always"),
     ("auto", "auto"),
     (" Manual ", "manual"),
@@ -704,8 +704,9 @@ def test_overview_mode_env(make_plugin, raw, expected):
 def test_overview_mode_env_invalid_falls_back(make_plugin, caplog, raw):
     with caplog.at_level("WARNING"):
         p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE=raw)
-    assert p._overview_mode(None) == "always"
+    assert p._overview_mode(None) == "manual"
     assert "LLM_OVERVIEW_MODE" in caplog.text
+    assert "Falling back to 'manual'" in caplog.text
 
 
 def test_overview_mode_cookie_overrides_env(make_plugin):
@@ -744,7 +745,7 @@ def _assert_start_state(html):
 
 
 def test_post_search_always_mode_assert_start_state(make_plugin):
-    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE='always')
     assert _assert_start_state(_render(p, query="weather")) is True
 
 
@@ -780,11 +781,26 @@ def test_post_search_auto_mode_skips_on_infobox(make_plugin):
 
 def test_post_search_cookie_mode_wins(make_plugin):
     import ai_answers
-    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE='always')
     req = FakeRequest({ai_answers.OVERVIEW_MODE_COOKIE: 'manual'})
     html = _render(p, request=req, query="why is the sky blue?")
     assert _assert_start_state(html) is False
     assert 'const overview_mode = "manual"' in html
+    # ...and the other way round: the cookie beats the built-in manual default.
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    req = FakeRequest({ai_answers.OVERVIEW_MODE_COOKIE: 'always'})
+    html = _render(p, request=req, query="python list comprehension")
+    assert _assert_start_state(html) is True
+
+
+def test_post_search_cookieless_defaults_to_you_decide(make_plugin):
+    # No cookie and no LLM_OVERVIEW_MODE: show the Generate button, make no
+    # AI request until it is clicked.
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    html = _render(p, request=FakeRequest(), query="why is the sky blue?")
+    assert _assert_start_state(html) is False
+    assert 'const overview_mode = "manual"' in html
+    assert 'id="sxng-generate"' in html
 
 
 @pytest.mark.parametrize("interactive", ["true", "false"])
@@ -823,3 +839,34 @@ def test_post_search_question_mark_gate_applies_in_manual_mode(make_plugin):
     search = MockSearch(query="sky color")
     p.post_search(None, search)
     assert len(search.result_container.answers) == 0
+
+
+def test_cookieless_user_gets_no_followups_with_companion_plugin_default(make_plugin, monkeypatch):
+    # SearXNG seeds a cookieless user's plugin choices from each registered
+    # plugin's `active` state; README registers the companion with active: false.
+    import flask
+    import ai_answers
+
+    class Cfg:
+        active = False
+    companion = ai_answers.AIFollowupsPlugin(Cfg())
+    prefs = _req_with_plugin_choices({ai_answers.FOLLOWUPS_PLUGIN_ID: companion.active}).preferences
+
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    req = FakeRequest()
+    req.preferences = prefs
+    assert 'const show_followups = false' in _render(p, request=req)
+
+    # The stream route must not ask the model for the follow-up block either.
+    conn = FakeConn(FakeHTTPResponse(200, ["data: [DONE]\n"]))
+    monkeypatch.setattr(ai_answers, "_get_streaming_connection", lambda url: (conn, "/v1/chat/completions"))
+    app = flask.Flask(__name__)
+
+    @app.before_request
+    def _attach_prefs():
+        flask.request.preferences = prefs
+    p.init(app)
+    app.test_client().post('/ai-stream', json={"q": "why is the sky blue", "lang": "en",
+                                               "context": "[1] example.com: Sky: Rayleigh", "tk": _token(p)})
+    system = json.loads(conn.requests[0]["body"])["messages"][0]["content"]
+    assert "<<FOLLOWUPS>>" not in system

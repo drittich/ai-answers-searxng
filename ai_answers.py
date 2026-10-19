@@ -1720,16 +1720,17 @@ class SXNGPlugin(Plugin):
             logger.warning(f"{PLUGIN_NAME}: LLM_QUESTION_MARK_REQUIRED is deprecated and will be removed "
                            "in a later release; use LLM_OVERVIEW_MODE=auto instead.")
         # Admin default for how often the overview is shown; a user's cookie
-        # overrides it per search (see _overview_mode).
+        # overrides it per search (see _overview_mode). The built-in default is
+        # 'manual' ("You decide"): no AI request until the user clicks Generate.
         raw_mode = os.getenv('LLM_OVERVIEW_MODE', '').lower().strip()
         if raw_mode in OVERVIEW_MODES:
             self.overview_mode = raw_mode
         else:
             if raw_mode:
                 logger.warning(f"{PLUGIN_NAME}: Invalid LLM_OVERVIEW_MODE '{raw_mode}' "
-                               "(use always, auto, or manual). Falling back to 'always'. "
+                               "(use always, auto, or manual). Falling back to 'manual'. "
                                "To turn overviews off by default, set the plugin's active: false.")
-            self.overview_mode = 'always'
+            self.overview_mode = 'manual'
         raw_provider = os.getenv('LLM_PROVIDER', '').lower().strip()
         
         raw_url = os.getenv('LLM_URL', '').strip()
