@@ -249,6 +249,17 @@ INTERACTIVE_HTML = '''
                     </div>
 '''
 
+# Bot icon (Lucide "bot"), shown in the panel header and on the Generate button.
+# Strokes use currentColor so it picks up the theme colour.
+BOT_ICON_HTML = '''<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M12 6V2H8" />
+                            <path d="m8 18-4 4V8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2Z" />
+                            <path d="M2 12h2" />
+                            <path d="M9 11v2" />
+                            <path d="M15 11v2" />
+                            <path d="M20 12h2" />
+                        </svg>'''
+
 # Gear button opening the "how often" menu; rendered in the panel header and on
 # the "Generate" button row, in both interactive and simple modes.
 GEAR_HTML = '''<span class="sxng-gear-wrap"><button class="sxng-gear" type="button" title="AI overview settings" aria-label="AI overview settings" aria-haspopup="menu" aria-expanded="false">
@@ -292,6 +303,12 @@ OVERVIEW_MODE_CSS = '''
                             color: var(--color-result-link, #5e81ac);
                             font-size: 0.9rem;
                             cursor: pointer;
+                        }
+                        .sxng-generate-btn > svg {
+                            width: 1em;
+                            height: 1em;
+                            margin-right: 0.35em;
+                            vertical-align: -0.125em;
                         }
                         .sxng-generate-btn:hover { background: var(--color-base-background-hover, rgba(0,0,0,0.05)); }
                         .sxng-gear-wrap { position: relative; display: inline-flex; }
@@ -2676,12 +2693,12 @@ class SXNGPlugin(Plugin):
                             flex-shrink: 0;
                             transform-origin: center;
                         }}
-                        @keyframes sxng-sparkle-pulse {{
+                        @keyframes sxng-icon-pulse {{
                             0%, 100% {{ opacity: 1; transform: scale(1); }}
                             50% {{ opacity: 0.45; transform: scale(0.88); }}
                         }}
                         #sxng-stream-box.sxng-streaming .sxng-ai-header > svg {{
-                            animation: sxng-sparkle-pulse 1.6s ease-in-out infinite;
+                            animation: sxng-icon-pulse 1.6s ease-in-out infinite;
                         }}
                         #sxng-stream-data .sxng-md-p {{ margin: 0 0 0.5rem; white-space: normal; }}
                         #sxng-stream-data .sxng-md-h {{ font-weight: 600; font-size: 16px; margin: 0.6rem 0 0.3rem; white-space: normal; }}
@@ -2902,18 +2919,11 @@ class SXNGPlugin(Plugin):
                         {interactive_css}
                     </style>
                     <div id="sxng-generate-row" class="sxng-generate-row">
-                        <button id="sxng-generate" class="sxng-generate-btn" type="button">✨ Generate AI overview</button>
+                        <button id="sxng-generate" class="sxng-generate-btn" type="button">{BOT_ICON_HTML}Generate AI overview</button>
                         {GEAR_HTML}
                     </div>
                     <div class="sxng-ai-header">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                            <path d="M12 6V2H8" />
-                            <path d="m8 18-4 4V8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2Z" />
-                            <path d="M2 12h2" />
-                            <path d="M9 11v2" />
-                            <path d="M15 11v2" />
-                            <path d="M20 12h2" />
-                        </svg>
+                        {BOT_ICON_HTML}
                         <span>AI Summary</span>
                         <span class="sxng-ai-note">May contain mistakes</span>
                         <button id="sxng-stop" class="sxng-stop" type="button" title="Stop generating" aria-label="Stop generating">
