@@ -1,6 +1,6 @@
 # AI overview frequency setting
 
-Status: ready-for-agent
+Status: resolved
 Type: task
 
 ## What
@@ -64,3 +64,4 @@ Its behaviour stays the same: it's an extra condition applied in every mode. Whe
 ## Comments
 
 - 2026-10-17: Design settled in a grilling session; status changed from needs-triage to ready-for-agent.
+- 2026-10-18: Implemented (commits 4b1b80e, 3fd9545); status changed from ready-for-agent to resolved. Follow-up polish tracked in `.scratch/generate-button-polish/`.
