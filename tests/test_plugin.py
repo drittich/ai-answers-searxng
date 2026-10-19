@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import re
 import time
 
 import pytest
@@ -687,7 +688,7 @@ class FakeRequest:
 
 
 @pytest.mark.parametrize("raw,expected", [
-    (None, "always"),
+    (None, "manual"),
     ("always", "always"),
     ("auto", "auto"),
     (" Manual ", "manual"),
@@ -704,8 +705,9 @@ def test_overview_mode_env(make_plugin, raw, expected):
 def test_overview_mode_env_invalid_falls_back(make_plugin, caplog, raw):
     with caplog.at_level("WARNING"):
         p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE=raw)
-    assert p._overview_mode(None) == "always"
+    assert p._overview_mode(None) == "manual"
     assert "LLM_OVERVIEW_MODE" in caplog.text
+    assert "Falling back to 'manual'" in caplog.text
 
 
 def test_overview_mode_cookie_overrides_env(make_plugin):
@@ -744,7 +746,7 @@ def _assert_start_state(html):
 
 
 def test_post_search_always_mode_assert_start_state(make_plugin):
-    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE='always')
     assert _assert_start_state(_render(p, query="weather")) is True
 
 
@@ -753,9 +755,29 @@ def test_post_search_manual_mode_shows_generate_button(make_plugin):
     html = _render(p, query="why is the sky blue?")
     assert _assert_start_state(html) is False
     assert 'id="sxng-generate"' in html
-    assert 'Generate AI overview' in html
+    start = html.index('<button id="sxng-generate"')
+    button = html[start:html.index('</button>', start)]
+    assert button.endswith('</svg>Generate AI Summary')
     # The context is already in the page, so the click needs no extra search.
     assert 'const b64_init = "' in html
+
+
+def test_generate_button_shows_bot_icon_not_sparkles(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE='manual')
+    html = _render(p, query="why is the sky blue?")
+    start = html.index('<button id="sxng-generate"')
+    button = html[start:html.index('</button>', start)]
+    assert '✨' not in html
+    assert '<svg' in button and 'aria-hidden="true"' in button
+    # Same bot glyph as the panel header.
+    assert '<path d="M12 6V2H8" />' in button
+    assert button.index('<svg') < button.index('Generate AI Summary')
+
+
+def test_no_sparkle_names_in_rendered_panel(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    html = _render(p, query="weather")
+    assert 'sparkle' not in html.lower()
 
 
 @pytest.mark.parametrize("query,expected", [
@@ -780,11 +802,26 @@ def test_post_search_auto_mode_skips_on_infobox(make_plugin):
 
 def test_post_search_cookie_mode_wins(make_plugin):
     import ai_answers
-    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE='always')
     req = FakeRequest({ai_answers.OVERVIEW_MODE_COOKIE: 'manual'})
     html = _render(p, request=req, query="why is the sky blue?")
     assert _assert_start_state(html) is False
     assert 'const overview_mode = "manual"' in html
+    # ...and the other way round: the cookie beats the built-in manual default.
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    req = FakeRequest({ai_answers.OVERVIEW_MODE_COOKIE: 'always'})
+    html = _render(p, request=req, query="python list comprehension")
+    assert _assert_start_state(html) is True
+
+
+def test_post_search_cookieless_defaults_to_you_decide(make_plugin):
+    # No cookie and no LLM_OVERVIEW_MODE: show the Generate button, make no
+    # AI request until it is clicked.
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    html = _render(p, request=FakeRequest(), query="why is the sky blue?")
+    assert _assert_start_state(html) is False
+    assert 'const overview_mode = "manual"' in html
+    assert 'id="sxng-generate"' in html
 
 
 @pytest.mark.parametrize("interactive", ["true", "false"])
@@ -823,3 +860,100 @@ def test_post_search_question_mark_gate_applies_in_manual_mode(make_plugin):
     search = MockSearch(query="sky color")
     p.post_search(None, search)
     assert len(search.result_container.answers) == 0
+
+
+@pytest.mark.parametrize("stored", ["off", "absent"])
+def test_followups_off_on_render_and_stream_without_user_opt_in(make_plugin, monkeypatch, stored):
+    """With LLM_FOLLOWUPS unset, a user who hasn't opted in gets no follow-ups
+    on either the rendered page or the stream route.
+
+    SearXNG's own seeding of a cookieless user's plugin choices from each
+    plugin's `active` default (README: companion registered active: false)
+    can't run here because searx is mocked. Instead this covers both states
+    that seeding can leave the preferences in: the companion choice stored
+    as off, and no stored choice at all (env fallback).
+    """
+    import flask
+    import ai_answers
+
+    choices = {ai_answers.FOLLOWUPS_PLUGIN_ID: False} if stored == "off" else {}
+    prefs = _req_with_plugin_choices(choices).preferences
+
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    req = FakeRequest()
+    req.preferences = prefs
+    assert 'const show_followups = false' in _render(p, request=req)
+
+    # The stream route must not ask the model for the follow-up block either.
+    conn = FakeConn(FakeHTTPResponse(200, ["data: [DONE]\n"]))
+    monkeypatch.setattr(ai_answers, "_get_streaming_connection", lambda url: (conn, "/v1/chat/completions"))
+    app = flask.Flask(__name__)
+
+    @app.before_request
+    def _attach_prefs():
+        flask.request.preferences = prefs
+    p.init(app)
+    app.test_client().post('/ai-stream', json={"q": "why is the sky blue", "lang": "en",
+                                               "context": "[1] example.com: Sky: Rayleigh", "tk": _token(p)})
+    system = json.loads(conn.requests[0]["body"])["messages"][0]["content"]
+    assert "<<FOLLOWUPS>>" not in system
+
+
+def _coarse_pointer_css(html):
+    """Bodies of every `@media (pointer: coarse)` block in the page CSS, each
+    extracted up to its matching closing brace."""
+    bodies = []
+    for m in re.finditer(r'@media \(pointer: coarse\)\s*\{', html):
+        depth, i = 1, m.end()
+        while depth:
+            depth += {'{': 1, '}': -1}.get(html[i], 0)
+            i += 1
+        bodies.append(html[m.end():i - 1])
+    return bodies
+
+
+def _css_rule(css, selector):
+    """Declarations of the first rule in `css` whose selector is exactly `selector`."""
+    m = re.search(r'(?:^|[;{}\s])' + re.escape(selector) + r'\s*\{([^{}]*)\}', css)
+    return m.group(1) if m else None
+
+
+def test_coarse_pointer_css_extracts_whole_media_block():
+    html = ("@media (pointer: coarse) {\n  .a { x: 1; }\n  .b {\n    y: 2;\n  }\n}\n"
+            ".c { z: 3; }\n")
+    assert _coarse_pointer_css(html) == ["\n  .a { x: 1; }\n  .b {\n    y: 2;\n  }\n"]
+
+
+def _touch_rules(html, selector):
+    return [r for r in (_css_rule(b, selector) for b in _coarse_pointer_css(html)) if r]
+
+
+def test_post_search_generate_button_keeps_44px_touch_target(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE='manual')
+    html = _render(p, query="why is the sky blue?")
+    # The visible pill stays short; an invisible pseudo-element supplies the
+    # tap area on touch screens.
+    rules = _touch_rules(html, '.sxng-generate-btn::before')
+    assert rules, "no touch hit-area pseudo-element for the Generate button"
+    assert re.search(r'min-height:\s*44px', rules[0])
+    assert re.search(r'position:\s*absolute', rules[0])
+    assert re.search(r'position:\s*relative', _css_rule(html, '.sxng-generate-btn'))
+
+
+def test_post_search_generate_button_touch_override_only_widens(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE='manual')
+    html = _render(p, query="why is the sky blue?")
+    overrides = _touch_rules(html, '.sxng-generate-btn')
+    assert overrides
+    for rule in overrides:
+        # Vertical padding lives once, in the base rule.
+        assert not re.search(r'(?<![-\w])padding\s*:', rule)
+        assert re.search(r'padding-inline\s*:', rule)
+
+
+def test_post_search_generate_button_icon_is_flex_item(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE='manual')
+    html = _render(p, query="why is the sky blue?")
+    rule = _css_rule(html, '.sxng-generate-btn > svg')
+    assert re.search(r'flex-shrink:\s*0', rule)
+    assert 'vertical-align' not in rule

@@ -249,6 +249,17 @@ INTERACTIVE_HTML = '''
                     </div>
 '''
 
+# Bot icon (Lucide "bot"), shown in the panel header and on the Generate button.
+# Strokes use currentColor so it picks up the theme colour.
+BOT_ICON_HTML = '''<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M12 6V2H8" />
+                            <path d="m8 18-4 4V8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2Z" />
+                            <path d="M2 12h2" />
+                            <path d="M9 11v2" />
+                            <path d="M15 11v2" />
+                            <path d="M20 12h2" />
+                        </svg>'''
+
 # Gear button opening the "how often" menu; rendered in the panel header and on
 # the "Generate" button row, in both interactive and simple modes.
 GEAR_HTML = '''<span class="sxng-gear-wrap"><button class="sxng-gear" type="button" title="AI overview settings" aria-label="AI overview settings" aria-haspopup="menu" aria-expanded="false">
@@ -279,13 +290,25 @@ OVERVIEW_MODE_CSS = '''
                             gap: 0.5rem;
                         }
                         .sxng-generate-btn {
-                            padding: 0.3rem 0.8rem;
+                            /* A slim pill: explicit line-height so the theme's
+                               taller one doesn't inflate it; flex centres the label. */
+                            position: relative;
+                            display: inline-flex;
+                            align-items: center;
+                            padding: 0.05rem 0.8rem;
+                            line-height: 1;
                             border: 1px solid var(--color-result-link, #5e81ac);
                             border-radius: 999px;
                             background: transparent;
                             color: var(--color-result-link, #5e81ac);
                             font-size: 0.9rem;
                             cursor: pointer;
+                        }
+                        .sxng-generate-btn > svg {
+                            width: 1em;
+                            height: 1em;
+                            margin-right: 0.35em;
+                            flex-shrink: 0;
                         }
                         .sxng-generate-btn:hover { background: var(--color-base-background-hover, rgba(0,0,0,0.05)); }
                         .sxng-gear-wrap { position: relative; display: inline-flex; }
@@ -356,7 +379,17 @@ OVERVIEW_MODE_CSS = '''
                         .sxng-mode-note:empty { display: none; }
                         @media (pointer: coarse) {
                             .sxng-gear { width: 44px; height: 44px; }
-                            .sxng-generate-btn { padding: 0.55rem 1rem; }
+                            .sxng-generate-btn { padding-inline: 1rem; }
+                            /* Invisible 44px tap area around the slim pill. */
+                            .sxng-generate-btn::before {
+                                content: "";
+                                position: absolute;
+                                left: 0;
+                                right: 0;
+                                top: 50%;
+                                min-height: 44px;
+                                transform: translateY(-50%);
+                            }
                         }
 '''
 
@@ -1720,16 +1753,17 @@ class SXNGPlugin(Plugin):
             logger.warning(f"{PLUGIN_NAME}: LLM_QUESTION_MARK_REQUIRED is deprecated and will be removed "
                            "in a later release; use LLM_OVERVIEW_MODE=auto instead.")
         # Admin default for how often the overview is shown; a user's cookie
-        # overrides it per search (see _overview_mode).
+        # overrides it per search (see _overview_mode). The built-in default is
+        # 'manual' ("You decide"): no AI request until the user clicks Generate.
         raw_mode = os.getenv('LLM_OVERVIEW_MODE', '').lower().strip()
         if raw_mode in OVERVIEW_MODES:
             self.overview_mode = raw_mode
         else:
             if raw_mode:
                 logger.warning(f"{PLUGIN_NAME}: Invalid LLM_OVERVIEW_MODE '{raw_mode}' "
-                               "(use always, auto, or manual). Falling back to 'always'. "
+                               "(use always, auto, or manual). Falling back to 'manual'. "
                                "To turn overviews off by default, set the plugin's active: false.")
-            self.overview_mode = 'always'
+            self.overview_mode = 'manual'
         raw_provider = os.getenv('LLM_PROVIDER', '').lower().strip()
         
         raw_url = os.getenv('LLM_URL', '').strip()
@@ -2660,12 +2694,12 @@ class SXNGPlugin(Plugin):
                             flex-shrink: 0;
                             transform-origin: center;
                         }}
-                        @keyframes sxng-sparkle-pulse {{
+                        @keyframes sxng-icon-pulse {{
                             0%, 100% {{ opacity: 1; transform: scale(1); }}
                             50% {{ opacity: 0.45; transform: scale(0.88); }}
                         }}
                         #sxng-stream-box.sxng-streaming .sxng-ai-header > svg {{
-                            animation: sxng-sparkle-pulse 1.6s ease-in-out infinite;
+                            animation: sxng-icon-pulse 1.6s ease-in-out infinite;
                         }}
                         #sxng-stream-data .sxng-md-p {{ margin: 0 0 0.5rem; white-space: normal; }}
                         #sxng-stream-data .sxng-md-h {{ font-weight: 600; font-size: 16px; margin: 0.6rem 0 0.3rem; white-space: normal; }}
@@ -2886,18 +2920,11 @@ class SXNGPlugin(Plugin):
                         {interactive_css}
                     </style>
                     <div id="sxng-generate-row" class="sxng-generate-row">
-                        <button id="sxng-generate" class="sxng-generate-btn" type="button">✨ Generate AI overview</button>
+                        <button id="sxng-generate" class="sxng-generate-btn" type="button">{BOT_ICON_HTML}Generate AI Summary</button>
                         {GEAR_HTML}
                     </div>
                     <div class="sxng-ai-header">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                            <path d="M12 6V2H8" />
-                            <path d="m8 18-4 4V8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2Z" />
-                            <path d="M2 12h2" />
-                            <path d="M9 11v2" />
-                            <path d="M15 11v2" />
-                            <path d="M20 12h2" />
-                        </svg>
+                        {BOT_ICON_HTML}
                         <span>AI Summary</span>
                         <span class="sxng-ai-note">May contain mistakes</span>
                         <button id="sxng-stop" class="sxng-stop" type="button" title="Stop generating" aria-label="Stop generating">
