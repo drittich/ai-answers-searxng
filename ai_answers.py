@@ -284,6 +284,10 @@ OVERVIEW_MODE_CSS = '''
                            until it is clicked; the panel then grows in place. */
                         #sxng-stream-box.sxng-pending > :not(style):not(script):not(#sxng-generate-row) { display: none; }
                         #sxng-stream-box:not(.sxng-pending) > #sxng-generate-row { display: none; }
+                        /* While only the Generate row shows, hug it: drop the
+                           article's inline margin and trim the panel's padding. */
+                        #sxng-stream-box.sxng-pending { margin: 0 !important; }
+                        #answers:has(#sxng-stream-box.sxng-pending) { padding-block: 0.75rem; }
                         .sxng-generate-row {
                             display: flex;
                             align-items: center;
@@ -295,7 +299,7 @@ OVERVIEW_MODE_CSS = '''
                             position: relative;
                             display: inline-flex;
                             align-items: center;
-                            padding: 0.05rem 0.8rem;
+                            padding: 0.4rem 0.9rem;
                             line-height: 1;
                             border: 1px solid var(--color-result-link, #5e81ac);
                             border-radius: 999px;
