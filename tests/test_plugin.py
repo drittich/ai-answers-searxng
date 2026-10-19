@@ -759,6 +759,24 @@ def test_post_search_manual_mode_shows_generate_button(make_plugin):
     assert 'const b64_init = "' in html
 
 
+def test_generate_button_shows_bot_icon_not_sparkles(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE='manual')
+    html = _render(p, query="why is the sky blue?")
+    start = html.index('<button id="sxng-generate"')
+    button = html[start:html.index('</button>', start)]
+    assert '✨' not in html
+    assert '<svg' in button and 'aria-hidden="true"' in button
+    # Same bot glyph as the panel header.
+    assert '<path d="M12 6V2H8" />' in button
+    assert button.index('<svg') < button.index('Generate AI overview')
+
+
+def test_no_sparkle_names_in_rendered_panel(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    html = _render(p, query="weather")
+    assert 'sparkle' not in html.lower()
+
+
 @pytest.mark.parametrize("query,expected", [
     ("why is the sky blue", True),
     ("python list comprehension", False),
@@ -870,3 +888,24 @@ def test_cookieless_user_gets_no_followups_with_companion_plugin_default(make_pl
                                                "context": "[1] example.com: Sky: Rayleigh", "tk": _token(p)})
     system = json.loads(conn.requests[0]["body"])["messages"][0]["content"]
     assert "<<FOLLOWUPS>>" not in system
+
+
+def _coarse_pointer_css(html):
+    """Bodies of every `@media (pointer: coarse)` block in the page CSS."""
+    import re
+    return re.findall(r'@media \(pointer: coarse\)\s*\{(.*?)\n\s*\}\n', html, re.S)
+
+
+def test_post_search_generate_button_keeps_44px_touch_target(make_plugin):
+    import re
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE='manual')
+    html = _render(p, query="why is the sky blue?")
+    touch = "\n".join(_coarse_pointer_css(html))
+    # The visible pill stays short; an invisible pseudo-element supplies the
+    # tap area on touch screens.
+    hit = re.search(r'\.sxng-generate-btn::(?:before|after)\s*\{([^}]*)\}', touch)
+    assert hit, "no touch hit-area pseudo-element for the Generate button"
+    rule = hit.group(1)
+    assert re.search(r'min-height:\s*44px', rule)
+    assert re.search(r'position:\s*absolute', rule)
+    assert re.search(r'\.sxng-generate-btn\s*\{[^}]*position:\s*relative', html)
