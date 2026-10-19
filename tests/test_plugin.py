@@ -753,7 +753,9 @@ def test_post_search_manual_mode_shows_generate_button(make_plugin):
     html = _render(p, query="why is the sky blue?")
     assert _assert_start_state(html) is False
     assert 'id="sxng-generate"' in html
-    assert 'Generate AI overview' in html
+    start = html.index('<button id="sxng-generate"')
+    button = html[start:html.index('</button>', start)]
+    assert button.endswith('</svg>Generate AI Summary')
     # The context is already in the page, so the click needs no extra search.
     assert 'const b64_init = "' in html
 
@@ -767,7 +769,7 @@ def test_generate_button_shows_bot_icon_not_sparkles(make_plugin):
     assert '<svg' in button and 'aria-hidden="true"' in button
     # Same bot glyph as the panel header.
     assert '<path d="M12 6V2H8" />' in button
-    assert button.index('<svg') < button.index('Generate AI overview')
+    assert button.index('<svg') < button.index('Generate AI Summary')
 
 
 def test_no_sparkle_names_in_rendered_panel(make_plugin):

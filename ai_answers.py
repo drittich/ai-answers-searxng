@@ -2919,7 +2919,7 @@ class SXNGPlugin(Plugin):
                         {interactive_css}
                     </style>
                     <div id="sxng-generate-row" class="sxng-generate-row">
-                        <button id="sxng-generate" class="sxng-generate-btn" type="button">{BOT_ICON_HTML}Generate AI overview</button>
+                        <button id="sxng-generate" class="sxng-generate-btn" type="button">{BOT_ICON_HTML}Generate AI Summary</button>
                         {GEAR_HTML}
                     </div>
                     <div class="sxng-ai-header">

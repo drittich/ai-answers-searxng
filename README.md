@@ -166,7 +166,7 @@ Each user picks this from the gear icon in the panel header (or next to the **Ge
 | --- | --- | --- |
 | Always | `always` | Generate an overview for every eligible search. |
 | It decides | `auto` | Generate when the query contains `?`, starts with a question word (who, what, why, how, when, where, which, is, are, can, does, do, should, explain, compare, difference — English only), or has 5 or more words. Skip when SearXNG already returned a direct answer (e.g. a calculator result) or an infobox, and show the **Generate** button instead. No AI request is made to decide. |
-| You decide | `manual` | Show a one-line **Generate AI overview** button. Nothing is sent to the AI provider until it is clicked. |
+| You decide | `manual` | Show a one-line **Generate AI Summary** button. Nothing is sent to the AI provider until it is clicked. |
 | Never | — | Switch off the AI Answers plugin on the SearXNG Preferences page (the menu links there). To have overviews off by default for new users, set `active: false` on the plugin in `settings.yml`. |
 
 A shared `#ai=` link or an answer cached for the same search is always restored, whatever the mode.
