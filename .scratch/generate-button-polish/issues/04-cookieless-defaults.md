@@ -1,6 +1,6 @@
 # Default to "You decide" and no follow-up suggestions for users without cookies
 
-Status: ready-for-agent
+Status: done
 Type: task
 
 ## What
@@ -28,12 +28,14 @@ Assumption: the request said "no auto-response suggestions". This ticket reads t
 
 ## Acceptance criteria
 
-- [ ] With no cookie and no `LLM_OVERVIEW_MODE`, `post_search` picks `manual` (the Generate button shows and no AI request is made).
-- [ ] An invalid `LLM_OVERVIEW_MODE` falls back to `manual`, with an updated warning.
-- [ ] `LLM_OVERVIEW_MODE=always|auto` and the user's cookie still override it.
-- [ ] Shared `#ai=` links and cached answers still restore in `manual` mode.
-- [ ] With no cookies, no follow-up chips show and the follow-up prompt instruction isn't sent.
-- [ ] README updated: the `LLM_OVERVIEW_MODE` default is now `manual`, plus a migration note.
-- [ ] pytest covers the new default and the invalid-value fallback.
+- [x] With no cookie and no `LLM_OVERVIEW_MODE`, `post_search` picks `manual` (the Generate button shows and no AI request is made).
+- [x] An invalid `LLM_OVERVIEW_MODE` falls back to `manual`, with an updated warning.
+- [x] `LLM_OVERVIEW_MODE=always|auto` and the user's cookie still override it.
+- [x] Shared `#ai=` links and cached answers still restore in `manual` mode.
+- [x] With no cookies, no follow-up chips show and the follow-up prompt instruction isn't sent.
+- [x] README updated: the `LLM_OVERVIEW_MODE` default is now `manual`, plus a migration note.
+- [x] pytest covers the new default and the invalid-value fallback.
 
 ## Comments
+
+- Follow-up defaults (code check; the live deployment was not reachable from the agent): the code already defaults to off. `LLM_FOLLOWUPS` falls back to `false`; when `AIFollowupsPlugin` is registered, its per-user choice wins, and SearXNG seeds a cookieless user's choice from the plugin's `active`, which `Plugin.__init__` takes from `settings.yml` (the class attribute `active = False` is overwritten by the config value). So if chips show for cookieless users on the deployment, check `settings.yml` for `AIFollowupsPlugin: active: true` (or, with the companion not registered, `LLM_FOLLOWUPS=true`). Note that a registered companion with `active: false` beats `LLM_FOLLOWUPS=true`. Added `test_cookieless_user_gets_no_followups_with_companion_plugin_default`, which covers both the rendered page (`show_followups = false`) and the `/ai-stream` prompt (no `<<FOLLOWUPS>>` instruction).

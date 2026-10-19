@@ -95,7 +95,7 @@ If a `plugins:` key already exists, add these entries under it rather than creat
 
 `active: true` is only the *default* — each user can turn the plugin on or off for themselves under **Preferences → General → AI Answers Plugin** (stored in their browser's preferences cookie). On a shared instance you can set `active: false` and let users opt in.
 
-The optional `AIFollowupsPlugin` entry is a second plugin whose only job is to render a **Follow-up questions** checkbox on the Preferences page (SearXNG gives each plugin a single on/off switch). Register it right after the main plugin so the toggle appears directly beneath it. When enabled, the AI answer suggests clickable follow-up questions below each response. Leave it out entirely and follow-ups are controlled instance-wide by the `LLM_FOLLOWUPS` env var instead (see below).
+The optional `AIFollowupsPlugin` entry is a second plugin whose only job is to render a **Follow-up questions** checkbox on the Preferences page (SearXNG gives each plugin a single on/off switch). Register it right after the main plugin so the toggle appears directly beneath it. When enabled, the AI answer suggests clickable follow-up questions below each response. Leave it out entirely and follow-ups are controlled instance-wide by the `LLM_FOLLOWUPS` env var instead (see below). Users without cookies get no follow-ups by default: with the entry registered as above, its `active: false` is their starting state (set `active: true` to turn follow-ups on for new users); without the entry, `LLM_FOLLOWUPS` defaults to `false`.
 
 ### Step 5 — Recreate the container
 
@@ -148,7 +148,7 @@ Configure via the environment variables:
 - `LLM_INTERACTIVE`: UI mode. Default is `true` (interactive: copy, regenerate, follow up). Set to `false` for simple response only mode.
 - `LLM_FOLLOWUPS`: Instance-wide default for the follow-up question chips shown below the answer (interactive mode only). Default `false`. If you register the `AIFollowupsPlugin` toggle (see above), each user's per-user setting takes precedence over this value; otherwise this controls it for everyone.
 - `LLM_COLLAPSED`: Show the answer as a fixed-height preview with a "Show more" / "Show less" toggle (no layout shift while streaming). Set to `false` for the always-expanded behavior. Default `true`.
-- `LLM_OVERVIEW_MODE`: Default for how often the AI overview is shown: `always`, `auto`, or `manual` (see [How often the overview appears](#how-often-the-overview-appears)). Each user's choice from the gear menu overrides it. Any other value (including `never`) logs a warning and falls back to `always`. Default `always`.
+- `LLM_OVERVIEW_MODE`: Default for how often the AI overview is shown: `always`, `auto`, or `manual` (see [How often the overview appears](#how-often-the-overview-appears)). Each user's choice from the gear menu overrides it. Any other value (including `never`) logs a warning and falls back to `manual`. Default `manual` (You decide: no AI request until the user clicks **Generate**).
 - `LLM_QUESTION_MARK_REQUIRED`: **Deprecated** — use `LLM_OVERVIEW_MODE=auto` instead; it will be removed in a later release and logs a warning when set. Only trigger AI answers when the query contains `?`, in every mode. Default `false`.
 - `LLM_OLLAMA_UNLOAD_AFTER`: Unload Ollama model after each response. Default `false`.
 - `LLM_URL_STATE`: Save/restore the conversation in the URL `#ai=` fragment so answers survive reloads and links are shareable. Set to `false` to keep conversations out of URLs and browser history. Default `true`.
@@ -160,7 +160,7 @@ Configure via the environment variables:
 
 ### How often the overview appears
 
-Each user picks this from the gear icon in the panel header (or next to the **Generate** button). The choice is stored in an `ai_answers_mode` cookie (one year, `SameSite=Lax`) and takes effect on the next search. Without a cookie, `LLM_OVERVIEW_MODE` applies.
+Each user picks this from the gear icon in the panel header (or next to the **Generate** button). The choice is stored in an `ai_answers_mode` cookie (one year, `SameSite=Lax`) and takes effect on the next search. Without a cookie, `LLM_OVERVIEW_MODE` applies, and if that is unset too, **You decide** (`manual`).
 
 | Option | Value | Behaviour |
 | --- | --- | --- |
@@ -170,6 +170,8 @@ Each user picks this from the gear icon in the panel header (or next to the **Ge
 | Never | — | Switch off the AI Answers plugin on the SearXNG Preferences page (the menu links there). To have overviews off by default for new users, set `active: false` on the plugin in `settings.yml`. |
 
 A shared `#ai=` link or an answer cached for the same search is always restored, whatever the mode.
+
+> **Upgrading: the default changed from `always` to `manual`.** Earlier versions generated an overview on every eligible search when `LLM_OVERVIEW_MODE` was unset. Now users without an `ai_answers_mode` cookie see the **Generate** button instead, and nothing is sent to the AI provider until they click it. To keep the old behaviour, set `LLM_OVERVIEW_MODE=always`. Users who already picked a mode from the gear menu keep their choice.
 
 ## How It Works
 1. user initial search
