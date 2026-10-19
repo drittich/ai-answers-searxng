@@ -758,6 +758,24 @@ def test_post_search_manual_mode_shows_generate_button(make_plugin):
     assert 'const b64_init = "' in html
 
 
+def test_generate_button_shows_bot_icon_not_sparkles(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k', LLM_OVERVIEW_MODE='manual')
+    html = _render(p, query="why is the sky blue?")
+    start = html.index('<button id="sxng-generate"')
+    button = html[start:html.index('</button>', start)]
+    assert '✨' not in html
+    assert '<svg' in button and 'aria-hidden="true"' in button
+    # Same bot glyph as the panel header.
+    assert '<path d="M12 6V2H8" />' in button
+    assert button.index('<svg') < button.index('Generate AI overview')
+
+
+def test_no_sparkle_names_in_rendered_panel(make_plugin):
+    p = make_plugin(LLM_PROVIDER='openrouter', LLM_KEY='k')
+    html = _render(p, query="weather")
+    assert 'sparkle' not in html.lower()
+
+
 @pytest.mark.parametrize("query,expected", [
     ("why is the sky blue", True),
     ("python list comprehension", False),
